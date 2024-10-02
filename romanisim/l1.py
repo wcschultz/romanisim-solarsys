@@ -110,6 +110,7 @@ from . import parameters
 from . import log
 from astropy import units as u
 from . import cr
+from . import moving_body
 
 
 def validate_times(tij):
@@ -479,8 +480,9 @@ def make_l1(counts, read_pattern,
             read_noise=None, pedestal_extra_noise=None,
             rng=None, seed=None,
             gain=None, inv_linearity=None, crparam=None,
-            persistence=None, tstart=None, saturation=None):
-    """Make an L1 image from a total electrons image.
+            persistence=None, tstart=None, saturation=None,
+            moving_body_param=None):
+    """Make an L1 image from a counts image.
 
     This apportions the total electrons among the different resultants and adds
     some instrumental effects (linearity, IPC, CRs, persistence, ...).
@@ -511,6 +513,9 @@ def make_l1(counts, read_pattern,
         Persistence instance describing persistence-affected pixels
     tstart : astropy.time.Time
         time of exposure start
+    moving_body_param : dict
+        Keyword arguments to romanisim.moving_body.simulate_body.  If None, no
+       moving bodies are simulated.
 
     Returns
     -------
@@ -527,6 +532,10 @@ def make_l1(counts, read_pattern,
         counts.array, tij, inv_linearity=inv_linearity, crparam=crparam,
         persistence=persistence, tstart=tstart,
         rng=rng, seed=seed)
+
+    #if moving_body_param is not None:
+    #    log.info('Adding moving bodies...')
+    #   resultants = moving_body.simulate_body(resultants, tij, tstart=tstart, wcs=counts.wcs, rng=rng, seed=seed, **moving_body_param)
 
     # roman.addReciprocityFailure(resultants_object)
 

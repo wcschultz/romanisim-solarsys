@@ -133,6 +133,16 @@ cr = {
     "pixel_depth": 5,
 }
 
+# moving body parameters
+moving_body = {
+    "num_bodies": 1,
+    "magnitude": 10,
+    "start_position": (100,100), # in pixels
+    "angular_radius": -1, #arcsec
+    "angular_speed": 1, # arcsec/sec
+    "direction": 0,
+}
+
 # Centermost PSF to use for mosaic creation
 default_sca = 2
 
