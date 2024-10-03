@@ -60,6 +60,9 @@ def simulate_body(
     # TODO: add WCS querying to allow RA and DEC inputs for more realistic obs
     #       xpos, ypos = wcs._xy(coord[:, 0], coord[:, 1])
 
+    pixel_scale = parameters.pixel_scale
+    if wcs is None:
+        wcs = galsim.PixelScale(pixel_scale)
     if rng is None:
         rng = galsim.BaseDeviate(seed)
 
@@ -81,52 +84,62 @@ def simulate_body(
     
     moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
 
-    photon_flux = 1000#10.**(magnitude / -2.5)
-    log.info(f'photon flux: {photon_flux}')
-    profile = galsim.DeltaFunction().withFlux(photon_flux)
+    photon_flux = 1000000#10.**(magnitude / -2.5)
+    #profile = galsim.DeltaFunction().withFlux(photon_flux)
 
-    # THis could work, but it is centering the box at the location, not from start to stop... Needs work
-    #if angular_radius < 0:
-    #    height = 0.0001
-    #else:
-    #    height = angular_radius
-    #width = angular_speed * parameters.read_time
-    #profile = galsim.Box(width, height).withFlux(photon_flux).rotate(galsim.Angle(direction, unit=galsim.degrees))
+    if angular_radius < 0:
+        height = 0.0001
+    else:
+        height = 2*angular_radius
 
-    # TODO: make pixel scale more dynamic
-    pixel_scale = 1. / 0.11 # 1 pixel spans 110 milliarcsec
-    x_vel = angular_speed * np.cos(direction * np.pi / 180.0) * pixel_scale
-    y_vel = angular_speed * np.sin(direction * np.pi / 180.0) * pixel_scale
+    cos_dir = np.cos(direction * np.pi / 180.0)
+    sin_dir = np.sin(direction * np.pi / 180.0)
+
+    x_vel = angular_speed * cos_dir / pixel_scale
+    y_vel = angular_speed * sin_dir / pixel_scale
 
     body_full_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
+
+    last_time = 0
+    if not isinstance(start_position, np.ndarray):
+        last_position = np.array(start_position)
+    else:
+        last_position = start_position
+
     for i_res in range(resultants.shape[0]):
         # make blank reads with PSF at that location
         body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
         for read_time in times[i_res]:
             # calculate new position
-            elapsed_time = read_time - tstart
-            read_position = (start_position[0] + elapsed_time * x_vel,
-                                start_position[1] + elapsed_time * y_vel)
+            elapsed_time = read_time - last_time
+            end_position = np.array([last_position[0] + elapsed_time * x_vel,
+                                      last_position[1] + elapsed_time * y_vel])
+            psf_position = (last_position + end_position) / 2. #adjust to make the boxes not overlap
+
+            last_time = read_time
+            last_position = end_position
+
+            width = angular_speed * elapsed_time
+            profile = galsim.Box(width, height).withFlux(photon_flux * elapsed_time).rotate(galsim.Angle(direction, unit=galsim.degrees))
 
             # add new psf at the read position
             if hasattr(moving_psf, 'at_position'):
-                psf0 = moving_psf.at_position(read_position[1], read_position[0])
+                psf0 = moving_psf.at_position(psf_position[1], psf_position[0])
             else:
                 psf0 = moving_psf
 
             body_conv = galsim.Convolve(profile, psf0)
-            stamp = body_conv.drawImage(center=read_position)
+            image_pos = galsim.PositionD(psf_position[0], psf_position[1])
+            pwcs = wcs.local(image_pos)
+            stamp = body_conv.drawImage(center=image_pos, wcs=pwcs)
             stamp.addNoise(galsim.PoissonNoise(rng))
-
-            log.info(f'Sum of stamp: {np.sum(stamp.array)}')
 
             overlapping_bounds = stamp.bounds & body_resultant_image.bounds
             if overlapping_bounds.area() > 0:
                 body_resultant_image[overlapping_bounds] += stamp[overlapping_bounds]
-                log.info('Adding another body')
         
         # average the reads into a single resultant
-        body_resultant_image /= len(times)
+        body_resultant_image /= len(times[i_res])
         body_full_image += body_resultant_image
 
         # add the new PSF to the resultant
