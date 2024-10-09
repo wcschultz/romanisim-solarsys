@@ -84,7 +84,7 @@ def simulate_body(
     
     moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
 
-    photon_flux = 1000000#10.**(magnitude / -2.5)
+    photon_flux = 10000 #1000000 #10.**(magnitude / -2.5)
     #profile = galsim.DeltaFunction().withFlux(photon_flux)
 
     if angular_radius < 0:
