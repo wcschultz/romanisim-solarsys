@@ -535,7 +535,7 @@ def make_l1(counts, read_pattern,
     if moving_body_param is None:
         moving_body_param = parameters.moving_body
     log.info('Adding moving bodies...')
-    resultants = moving_body.simulate_body(resultants, tij, tstart=tstart, wcs=counts.wcs, rng=rng, seed=seed, **moving_body_param)
+    resultants = moving_body.simulate_body(resultants, tij, wcs=counts.wcs, rng=rng, seed=seed, **moving_body_param)
 
     add_ipc(resultants)
 

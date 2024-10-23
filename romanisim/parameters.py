@@ -139,7 +139,7 @@ moving_body = {
     "start_position": (100,100), # in pixels
     "angular_radius": -1, #arcsec
     "angular_speed": 0.1, # arcsec/sec
-    "direction": 35,
+    "direction": 37,
 }
 
 # Centermost PSF to use for mosaic creation

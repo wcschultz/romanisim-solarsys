@@ -1,3 +1,5 @@
+"""This module contains routines to add moving object to simulated data products.
+"""
 import numpy as np
 import galsim
 import webbpsf as wpsf
@@ -9,7 +11,6 @@ from . import log
 def simulate_body(
     resultants,
     times,
-    tstart=None,
     wcs=None,
     rng=None,
     seed=47,
@@ -20,7 +21,6 @@ def simulate_body(
     direction=None,
     oversample=4,
 ):
-    #TODO: update this doc string!
     """Adds a moving body to an existing image.
 
     Parameters
@@ -29,8 +29,6 @@ def simulate_body(
         array of n_resultant images giving each resultant
     times : list[list[float]]
         list of list of readout times for each read entering a resultant
-    tstart : astropy.time.Time
-        Time of exposure start.  Used only if persistence is not None.
     wcs : galsim.image.wcs
         WCS associated with the galsim image
     rng : np.random.Generator
@@ -57,6 +55,10 @@ def simulate_body(
     """
 
     # TODO: add persistence once prototype is working
+    # TODO: add inverse linearity
+    # TODO: add IPC if necessary
+    # TODO: try to pass PSF object so it is not created twice (this is the 
+    #       longest step of the moving body calculations)
     # TODO: add WCS querying to allow RA and DEC inputs for more realistic obs
     #       xpos, ypos = wcs._xy(coord[:, 0], coord[:, 1])
 
@@ -84,7 +86,7 @@ def simulate_body(
     
     moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
 
-    photon_flux = 10000 #1000000 #10.**(magnitude / -2.5)
+    photon_flux = 50000 #1000000 #10.**(magnitude / -2.5)
     #profile = galsim.DeltaFunction().withFlux(photon_flux)
 
     if angular_radius < 0:
