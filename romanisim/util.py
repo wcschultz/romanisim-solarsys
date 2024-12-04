@@ -2,14 +2,32 @@
 """
 
 import numpy as np
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, get_body_barycentric_posvel
 from astropy import units as u
 from astropy.time import Time
 import galsim
 import gwcs as gwcsmod
 
 from romanisim import parameters, wcs, bandpass
+from romanisim.velocity_aberration import compute_va_effects
 from scipy import integrate
+
+__all__ = ["skycoord",
+           "celestialcoord",
+           "scalergb",
+           "random_points_in_cap",
+           "random_points_in_king",
+           "random_points_at_radii",
+           "add_more_metadata",
+           "update_pointing_and_wcsinfo_metadata",
+           "king_profile",
+           "sample_king_distances",
+           "decode_context_times",
+           "default_image_meta",
+           "update_photom_keywords",
+           "merge_dicts",
+           "calc_scale_factor",
+]
 
 
 def skycoord(celestial):
@@ -189,8 +207,8 @@ def add_more_metadata(metadata):
 
     if 'exposure' not in metadata.keys():
         metadata['exposure'] = {}
-    if 'guidestar' not in metadata.keys():
-        metadata['guidestar'] = {}
+    if 'guide_star' not in metadata.keys():
+        metadata['guide_star'] = {}
     read_pattern = metadata['exposure'].get(
         'read_pattern',
         parameters.read_pattern[metadata['exposure']['ma_table_number']])
@@ -204,73 +222,32 @@ def add_more_metadata(metadata):
     for prefix, offset in offsets.items():
         metadata['exposure'][f'{prefix}_time'] = Time((
             starttime + offset).isot)
-        metadata['exposure'][f'{prefix}_time_mjd'] = (
-            starttime + offset).mjd
-        metadata['exposure'][f'{prefix}_time_tdb'] = (
-            starttime + offset).tdb.mjd
-    metadata['exposure']['ngroups'] = len(read_pattern)
-    metadata['exposure']['sca_number'] = (
-        int(metadata['instrument']['detector'][-2:]))
-    metadata['exposure']['integration_time'] = openshuttertime
-    metadata['exposure']['elapsed_exposure_time'] = openshuttertime
-    # ???
-    metadata['exposure']['groupgap'] = 0
+    metadata['exposure']['nresultants'] = len(read_pattern)
     metadata['exposure']['frame_time'] = parameters.read_time
     metadata['exposure']['exposure_time'] = openshuttertime
-    metadata['exposure']['effective_exposure_time'] = openshuttertime
-    metadata['exposure']['duration'] = openshuttertime
-    metadata['guidestar']['gw_window_xsize'] = 16
-    metadata['guidestar']['gw_window_ysize'] = 16
-    if 'gw_window_xstart' in metadata['guidestar']:
-        metadata['guidestar']['gw_window_xstop'] = (
-            metadata['guidestar']['gw_window_xstart'])
-        metadata['guidestar']['gw_window_ystop'] = (
-            metadata['guidestar']['gw_window_ystart'])
-    # integration_start?  integration_end?  nints = 1?  ...
-
-    if 'target' not in metadata.keys():
-        metadata['target'] = {}
-    target = metadata['target']
-    target['type'] = 'FIXED'
-    if 'wcsinfo' in metadata.keys():
-        target['ra'] = metadata['wcsinfo']['ra_ref']
-        target['dec'] = metadata['wcsinfo']['dec_ref']
-        target['proposer_ra'] = target['ra']
-        target['proposer_dec'] = target['dec']
-    target['ra_uncertainty'] = 0
-    target['dec_uncertainty'] = 0
-    target['proper_motion_ra'] = 0
-    target['proper_motion_dec'] = 0
-    target['proper_motion_epoch'] = 'J2000'
-    target['source_type'] = 'EXTENDED'
-
-    # there are a few metadata keywords that have problematic, too-long
-    # defaults in RDM.
-    # program.category
-    # ephemeris.ephemeris_reference_frame
-    # guidestar.gs_epoch
-    # this truncates these to the maximum allowed characters.  Alternative
-    # solutions would include doing things like:
-    #   making the roman_datamodels defaults archivable
-    #   making the roman_datamodels validation check lengths of strings
-    if 'program' in metadata:
-        metadata['program']['category'] = metadata['program']['category'][:6]
-    if 'ephemeris' in metadata:
-        metadata['ephemeris']['ephemeris_reference_frame'] = (
-            metadata['ephemeris']['ephemeris_reference_frame'][:10])
-    if 'guidestar' in metadata and 'gs_epoch' in metadata['guidestar']:
-        metadata['guidestar']['gs_epoch'] = (
-            metadata['guidestar']['gs_epoch'][:10])
+    effexptime = parameters.read_time * (
+        np.mean(read_pattern[-1]) - np.mean(read_pattern[0]))
+    metadata['exposure']['effective_exposure_time'] = effexptime
+    metadata['guide_star']['window_xsize'] = 16
+    metadata['guide_star']['window_ysize'] = 16
+    if 'window_xstart' in metadata['guide_star']:
+        metadata['guide_star']['window_xstop'] = (
+            metadata['guide_star']['window_xstart'])
+        metadata['guide_star']['window_ystop'] = (
+            metadata['guide_star']['window_ystart'])
+    if 'visit' not in metadata.keys():
+        metadata['visit'] = dict()
+    metadata['visit']['status'] = 'SUCCESSFUL'
 
 
-def update_aperture_and_wcsinfo_metadata(metadata, gwcs):
-    """Update aperture and wcsinfo keywords to use the aperture for this SCA.
+def update_pointing_and_wcsinfo_metadata(metadata, gwcs):
+    """Update pointing and wcsinfo keywords to use the aperture for this SCA.
 
     Updates metadata in place, setting v2/v3_ref to be equal to the V2 and V3 of
     the center of the detector, and ra/dec_ref accordingly.  Also updates the
-    aperture to refer to this SCA.
+    pointing to refer to this SCA and ra/dec_v1 to point along the boresight.
 
-    No updates are  performed if gwcs is not a gWCS object or if aperture and
+    No updates are  performed if gwcs is not a gWCS object or if pointing and
     wcsinfo are not present in metadata.
 
     Parameters
@@ -280,21 +257,20 @@ def update_aperture_and_wcsinfo_metadata(metadata, gwcs):
     gwcs : WCS object
         image WCS
     """
-    if 'aperture' not in metadata or 'wcsinfo' not in metadata:
+    if 'pointing' not in metadata or 'wcsinfo' not in metadata:
         return
     if isinstance(gwcs, wcs.GWCS):
         gwcs = gwcs.wcs
     if not isinstance(gwcs, gwcsmod.wcs.WCS):
         return
-    metadata['aperture']['name'] = (
-        metadata['instrument']['detector'][:3] + '_'
-        + metadata['instrument']['detector'][3:] + '_FULL')
+    metadata['wcsinfo']['aperture_name'] = (
+        metadata['instrument']['detector'] + '_FULL')
     distortion = gwcs.get_transform('detector', 'v2v3')
     center = (galsim.roman.n_pix / 2 - 0.5, galsim.roman.n_pix / 2 - 0.5)
     v2v3 = distortion(*center)
     radec = gwcs(*center)
     t2sky = gwcs.get_transform('v2v3', 'world')
-    radecn = t2sky(v2v3[0], v2v3[1] + 1)
+    radecn = t2sky(v2v3[0], v2v3[1] + 100)
     roll_ref = (
         SkyCoord(radec[0] * u.deg, radec[1] * u.deg).position_angle(
         SkyCoord(radecn[0] * u.deg, radecn[1] * u.deg)))
@@ -313,6 +289,20 @@ def update_aperture_and_wcsinfo_metadata(metadata, gwcs):
     metadata['wcsinfo']['v2_ref'] = v2v3[0]
     metadata['wcsinfo']['v3_ref'] = v2v3[1]
     metadata['wcsinfo']['roll_ref'] = roll_ref
+
+    boresight = t2sky(0, 0)
+    metadata['pointing']['ra_v1'] = boresight[0]
+    metadata['pointing']['dec_v1'] = boresight[1]
+    boresightn = t2sky(0, 1)
+    pa_v3 = (
+        SkyCoord(boresight[0] * u.deg, boresight[1] * u.deg).position_angle(
+        SkyCoord(boresightn[0] * u.deg, boresightn[1] * u.deg)))
+    pa_v3 = pa_v3.to(u.deg).value
+    metadata['pointing']['pa_v3'] = pa_v3
+
+    # Update velocity aberration meta for the reference point
+    metadata['velocity_aberration']['ra_reference'] = radec[0]
+    metadata['velocity_aberration']['dec_reference'] = radec[1]
 
 
 def king_profile(r, rc, rt):
@@ -450,7 +440,7 @@ def decode_context_times(context, exptimes):
     return total_exptimes
 
 
-def default_image_meta(time=None, ma_table=1, filter_name='F087',
+def default_image_meta(time=None, ma_table=4, filter_name='F087',
                        detector='WFI01', coord=None):
     """Return some simple default metadata for input to image.simulate
 
@@ -481,7 +471,7 @@ def default_image_meta(time=None, ma_table=1, filter_name='F087',
     meta = {
         'exposure': {
             'start_time': time,
-            'ma_table_number': 1,
+            'ma_table_number': 4,
         },
         'instrument': {
             'optical_element': filter_name,
@@ -532,22 +522,16 @@ def update_photom_keywords(im, gain=None):
                  cc[0].position_angle(cc[2]))
         area = (cc[0].separation(cc[1]) * cc[0].separation(cc[2])
                 * np.sin(angle.to(u.rad).value))
-        im['meta']['photometry']['pixelarea_steradians'] = area.to(u.sr)
-        im['meta']['photometry']['pixelarea_arcsecsq'] = (
-            area.to(u.arcsec ** 2))
-        im['meta']['photometry']['conversion_megajanskys'] = gain * (
-            3631 /
-            bandpass.get_abflux(im.meta['instrument']['optical_element']) /
-            10 ** 6 /
-            im['meta']['photometry']['pixelarea_steradians']) * u.MJy
+        im['meta']['photometry']['pixel_area'] = area.to(u.sr).value
+        val = (gain * (3631 / bandpass.get_abflux(
+             im.meta['instrument']['optical_element']) /
+             10 ** 6 / im['meta']['photometry']['pixel_area']))
+        im['meta']['photometry']['conversion_megajanskys'] = val
         im['meta']['photometry']['conversion_microjanskys'] = (
-            im['meta']['photometry']['conversion_megajanskys'].to(
-                u.uJy / u.arcsec ** 2))
+            val * u.MJy / u.sr).to(u.uJy / u.arcsec ** 2).value
 
-    im['meta']['photometry']['conversion_megajanskys_uncertainty'] = (
-        0 * u.MJy / u.sr)
-    im['meta']['photometry']['conversion_microjanskys_uncertainty'] = (
-        0 * u.uJy / u.arcsec ** 2)
+    im['meta']['photometry']['conversion_megajanskys_uncertainty'] = 0
+    im['meta']['photometry']['conversion_microjanskys_uncertainty'] = 0
 
 
 def merge_dicts(a, b):
@@ -577,3 +561,34 @@ def merge_dicts(a, b):
         else:
             a[key] = b[key]
     return a
+
+
+def calc_scale_factor(date, ra, dec):
+    """Calculate velocity aberration scale factor
+
+    The L2 orbit is just a delta on the Earth's orbit. At the moment, there is no ephemeris for
+    Roman yet, the Earth's barycentric velocity is used to calculate velocity aberration. A scale
+    of 1.01 is applied to the velocity to scale, approximately, to what would be Roman's velocity.
+
+    Parameters
+    ----------
+    date : str or astropy.Time
+        The date at which to calculate the velocity.
+
+    ra, dec: float
+        The right ascension and declination of the target (or some other
+        point, such as the center of a detector) in the barycentric coordinate
+        system.  The equator and equinox should be the same as the coordinate
+        system for the velocity. In degrees.
+
+    Returns
+    -------
+    scale_factor : float
+        The velocity aberration scale factor
+    """
+    _, velocity = get_body_barycentric_posvel('earth', date)
+    velocity = 1.01 * velocity  # Move from earth to Roman.
+    xyz_velocity = velocity.xyz.to(u.km / u.s)
+    scale_factor, _, _ = compute_va_effects(*xyz_velocity.value, ra, dec)
+
+    return scale_factor

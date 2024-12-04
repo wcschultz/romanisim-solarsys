@@ -259,7 +259,7 @@ def add_objects_to_image(image, objlist, xpos, ypos, psf,
     if rng is None:
         rng = galsim.UniformDeviate(seed)
 
-    log.info('Adding sources to image...')
+    log.info(f'Adding {len(objlist)} sources to image...')
     nrender = 0
 
     chromatic = False
@@ -635,8 +635,8 @@ def gather_reference_data(image_mod, usecrds=False):
                 log.warning('Could not find flat; using 1')
                 flat = 1
             out['flat'] = flat
-        image_mod.meta.ref_file.crds.sw_version = crds.__version__
-        image_mod.meta.ref_file.crds.context_used = crds.get_context_name(
+        image_mod.meta.ref_file.crds.version = crds.__version__
+        image_mod.meta.ref_file.crds.context = crds.get_context_name(
             observatory=image_mod.crds_observatory)
 
     # reffiles has all of the reference files / values we know about
@@ -791,7 +791,7 @@ def simulate(metadata, objlist,
     counts, simcatobj = simulate_counts(
         image_mod.meta, objlist, rng=rng, usecrds=usecrds, darkrate=darkrate,
         webbpsf=webbpsf, flat=flat, psf_keywords=psf_keywords)
-    util.update_aperture_and_wcsinfo_metadata(image_mod.meta, counts.wcs)
+    util.update_pointing_and_wcsinfo_metadata(image_mod.meta, counts.wcs)
     if level == 0:
         im = dict(data=counts.array, meta=dict(image_mod.meta.items()))
     else:
@@ -860,8 +860,6 @@ def make_asdf(slope, slopevar_rn, slopevar_poisson, metadata=None,
               filepath=None, persistence=None, dq=None, imwcs=None,
               gain=None):
     """Wrap a galsim simulated image with ASDF/roman_datamodel metadata.
-
-    Eventually this needs to get enough info to reconstruct a refit WCS.
     """
 
     out = maker_utils.mk_level2_image(
@@ -881,10 +879,6 @@ def make_asdf(slope, slopevar_rn, slopevar_poisson, metadata=None,
     # ref_file: conceptually sound when we work from crds reference
     #     files
     # target: can push forward from APT file
-    # velocity_aberration:  I guess to first order,
-    #     ignore the detailed orbit around L2 and just project
-    #     the earth out to L2, and use that for the velocity
-    #     aberration?  Don't do until someone asks.
     # visit: start_time, end_time, total_exposures, ...?
     # wcsinfo: v2_ref, v3_ref, vparity, v3yangle, ra_ref, dec_ref
     #     roll_ref, s_region
@@ -898,13 +892,13 @@ def make_asdf(slope, slopevar_rn, slopevar_poisson, metadata=None,
 
     util.update_photom_keywords(out, gain=gain)
 
-    out['data'] = slope
+    out['data'] = slope.value
     out['dq'] = np.zeros(slope.shape, dtype='u4')
     if dq is not None:
         out['dq'][:, :] = dq
-    out['var_poisson'] = slopevar_poisson
-    out['var_rnoise'] = slopevar_rn
-    out['var_flat'] = slopevar_rn * 0
+    out['var_poisson'] = slopevar_poisson.value
+    out['var_rnoise'] = slopevar_rn.value
+    out['var_flat'] = slopevar_rn.value * 0
     out['err'] = np.sqrt(out['var_poisson'] + out['var_rnoise'] + out['var_flat'])
     extras = dict()
     if persistence is not None:
@@ -1030,10 +1024,10 @@ def inject_sources_into_l2(model, cat, x=None, y=None, psf=None, rng=None,
     # create injected source ramp resultants
     resultants, dq = romanisim.l1.apportion_counts_to_resultants(
         sourcecounts.array[m], tij, rng=rng)
-    resultants *= u.electron
+    resultants = resultants * u.electron
 
     # Inject source to original image
-    newramp = model.data[None, :] * tbar[:, None, None] * u.s
+    newramp = model.data[None, :] * tbar[:, None, None] * u.DN
     newramp[:, m] += resultants / gain
     # newramp has units of DN
 

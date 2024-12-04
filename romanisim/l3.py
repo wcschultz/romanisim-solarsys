@@ -17,6 +17,7 @@ import romanisim.psf
 import romanisim.image
 import romanisim.persistence
 import romanisim.parameters
+import romanisim.util
 import roman_datamodels.datamodels as rdm
 from roman_datamodels.stnode import WfiMosaic
 import astropy.units as u
@@ -72,7 +73,7 @@ def add_objects_to_l3(l3_mos, source_cat, exptimes, xpos, ypos, psf,
     # Create Image canvas to add objects to
     if isinstance(l3_mos, (rdm.MosaicModel, WfiMosaic)):
         sourcecountsall = galsim.ImageF(
-            l3_mos.data.value, wcs=romanisim.wcs.GWCS(l3_mos.meta.wcs),
+            l3_mos.data, wcs=romanisim.wcs.GWCS(l3_mos.meta.wcs),
             xmin=0, ymin=0)
     else:
         sourcecountsall = l3_mos
@@ -87,7 +88,7 @@ def add_objects_to_l3(l3_mos, source_cat, exptimes, xpos, ypos, psf,
 
     # Save array with added sources
     if isinstance(l3_mos, (rdm.MosaicModel, WfiMosaic)):
-        l3_mos.data = sourcecountsall.array * l3_mos.data.unit
+        l3_mos.data = sourcecountsall.array
 
     return outinfo
 
@@ -162,18 +163,18 @@ def inject_sources_into_l3(model, cat, x=None, y=None, psf=None, rng=None,
         # Set scaling factor for injected sources
         # Flux / sigma_p^2
         xidx, yidx = int(np.round(x0)), int(np.round(y0))
-        if model.var_poisson[yidx, xidx].value != 0:
+        if model.var_poisson[yidx, xidx] != 0:
             Ct.append(math.fabs(
-                model.data[yidx, xidx].value /
-                model.var_poisson[yidx, xidx].value))
+                model.data[yidx, xidx] /
+                model.var_poisson[yidx, xidx]))
         else:
             Ct.append(1.0)
     Ct = np.array(Ct)
     # etomjysr = 1/C; C converts fluxes to electrons
     exptimes = Ct * etomjysr
 
-    Ct_all = (model.data.value /
-              (model.var_poisson.value + (model.var_poisson.value == 0)))
+    Ct_all = (model.data /
+              (model.var_poisson + (model.var_poisson == 0)))
 
     # compute the total number of counts we got from the source
     res = add_objects_to_l3(
@@ -181,7 +182,7 @@ def inject_sources_into_l3(model, cat, x=None, y=None, psf=None, rng=None,
         maggytoes=maggytoes, filter_name=filter_name, bandpass=None,
         rng=rng)
 
-    model.var_poisson = (model.data.value / Ct_all) * model.var_poisson.unit
+    model.var_poisson = (model.data / Ct_all)
 
     return res
 
@@ -330,19 +331,19 @@ def simulate(shape, wcs, efftimes, filter_name, catalog, nexposures=1,
     """
 
     # Create metadata object
-    meta = maker_utils.mk_mosaic_meta()
+    meta = maker_utils.mk_mosaic_meta()  # all dummy values
+
+    # add romanisim defaults
     for key in romanisim.parameters.default_mosaic_parameters_dictionary.keys():
         meta[key].update(
             romanisim.parameters.default_mosaic_parameters_dictionary[key])
-    meta['wcs'] = wcs
-    meta['basic']['optical_element'] = filter_name
-    for key in metadata.keys():
-        if key not in meta or not isinstance(meta[key], dict):
-            meta[key] = metadata[key]
-        else:
-            meta[key].update(metadata[key])
+
+    # add user-specified metadta
+    romanisim.util.merge_dicts(meta, metadata)
 
     add_more_metadata(meta, efftimes, filter_name, wcs, shape, nexposures)
+    meta['wcs'] = wcs
+    meta['basic']['optical_element'] = filter_name
 
     log.info('Simulating filter {0}...'.format(filter_name))
 
@@ -534,6 +535,7 @@ def simulate_cps(image, filter_name, efftimes, objlist=None, psf=None,
         objlist = []
     if len(objlist) > 0 and xpos is None:
         if isinstance(objlist, table.Table):
+            objlist = romanisim.image.trim_objlist(objlist, image)
             coord = np.array([[o['ra'], o['dec']] for o in objlist])
         else:
             coord = np.array([[o.sky_pos.ra.deg, o.sky_pos.dec.deg]
@@ -655,7 +657,7 @@ def make_l3(image, metadata, efftimes, var_poisson=None,
     """
 
     # Create mosaic data object
-    mosaic = image.array.copy() * u.MJy / u.sr
+    mosaic = image.array.copy()
 
     # Ensure that effective times are an array
     if isinstance(efftimes, np.ndarray):
@@ -677,11 +679,11 @@ def make_l3(image, metadata, efftimes, var_poisson=None,
     context = (np.ones((1,) + mosaic.shape, dtype=np.uint32)
                if context is None else context)
     
-    mosaic_node.var_poisson[...] = var_poisson * mosaic.unit ** 2
-    mosaic_node.var_rnoise[...] = var_rnoise * mosaic.unit ** 2
-    mosaic_node.var_flat[...] = var_flat * mosaic.unit ** 2
+    mosaic_node.var_poisson[...] = var_poisson
+    mosaic_node.var_rnoise[...] = var_rnoise
+    mosaic_node.var_flat[...] = var_flat
     mosaic_node.err[...] = np.sqrt(
-        var_poisson + var_rnoise + var_flat) * mosaic.unit
+        var_poisson + var_rnoise + var_flat)
     mosaic_node.context = context
     
 
@@ -730,9 +732,8 @@ def add_more_metadata(metadata, efftimes, filter_name, wcs, shape, nexposures):
     metadata['basic']['individual_image_meta'] = None
     metadata['model_type'] = 'WfiMosaic'
     metadata['photometry']['conversion_microjanskys'] = (
-        (1e12 * (u.rad / u.arcsec) ** 2).to(u.dimensionless_unscaled) *
-        u.uJy / u.arcsec ** 2)
-    metadata['photometry']['conversion_megajanskys'] = 1 * u.MJy / u.sr
+        (1e12 * (u.rad / u.arcsec) ** 2).to(u.dimensionless_unscaled))
+    metadata['photometry']['conversion_megajanskys'] = 1
 
     cenx, ceny = ((shape[1] - 1) / 2, (shape[0] - 1) / 2)
     c1 = wcs.pixel_to_world(cenx, ceny)
@@ -742,10 +743,8 @@ def add_more_metadata(metadata, efftimes, filter_name, wcs, shape, nexposures):
     metadata['photometry']['pixelarea_steradians'] = (pscale ** 2).to(u.sr)
     metadata['photometry']['pixelarea_arcsecsq'] = (
         pscale.to(u.arcsec) ** 2)
-    metadata['photometry']['conversion_microjanskys_uncertainty'] = (
-        0 * u.uJy / u.arcsec ** 2)
-    metadata['photometry']['conversion_megajanskys_uncertainty'] = (
-        0 * u.MJy / u.sr)
+    metadata['photometry']['conversion_microjanskys_uncertainty'] = 0
+    metadata['photometry']['conversion_megajanskys_uncertainty'] = 0
     metadata['resample']['pixel_scale_ratio'] = (
         pscale.to(u.arcsec).value / romanisim.parameters.pixel_scale)
     metadata['resample']['pixfrac'] = 0

@@ -30,16 +30,16 @@ def go(args):
         origprevious = copy(args.previous)
         for i in range(1, 19):
             args.sca = i
-            args.filename = origfilename.format(f'WFI{args.sca:02d}')
+            args.filename = origfilename.format(f'wfi{args.sca:02d}')
             if origprevious is not None:
-                args.previous = origprevious.format(f'WFI{args.sca:02d}')
+                args.previous = origprevious.format(f'wfi{args.sca:02d}')
             go(args)
         return
 
     metadata = ris.set_metadata(
         date=args.date, bandpass=args.bandpass,
         sca=args.sca, ma_table_number=args.ma_table_number,
-        truncate=args.truncate)
+        truncate=args.truncate, scale_factor=args.scale_factor)
 
     if args.radec is not None:
         coord = SkyCoord(ra=args.radec[0] * u.deg, dec=args.radec[1] * u.deg,
@@ -92,7 +92,9 @@ if __name__ == '__main__':
     parser.add_argument('--rng_seed', type=int, default=None)
     parser.add_argument('--roll', type=float, default=0,
                         help='Position angle (North towards YIdl) measured at the V2Ref/V3Ref of the aperture used.')
-    parser.add_argument('--sca', type=int, default=7, help='SCA to simulate. Use -1 to generate images for all SCAs.')
+    parser.add_argument('--sca', type=int, default=7, help=(
+        'SCA to simulate. Use -1 to generate images for all SCAs; include {} in filename for this mode '
+        'to indicate where the SCA number should be filled, e.g. l1_wfi{}.asdf'))
     parser.add_argument('--usecrds', action='store_true',
                         help='Use CRDS for distortion map')
     parser.add_argument('--webbpsf', action='store_true',
@@ -104,6 +106,8 @@ if __name__ == '__main__':
         'are updated to be grism / prism.'))
     parser.add_argument('--drop-extra-dq', default=False, action='store_true',
                         help=('Do not store the optional simulated dq array.'))
+    parser.add_argument('--scale-factor', type=float, default=-1.,
+                        help=('Velocity aberration-induced scale factor. If negative, use given time to calculated based on orbit ephemeris.'))
 
     args = parser.parse_args()
 

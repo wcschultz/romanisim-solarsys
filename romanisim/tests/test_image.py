@@ -601,7 +601,7 @@ def test_reference_file_crds_match(level):
     metadata = copy.deepcopy(parameters.default_parameters_dictionary)
     metadata['instrument']['detector'] = 'WFI07'
     metadata['instrument']['optical_element'] = 'F158'
-    metadata['exposure']['ma_table_number'] = 1
+    metadata['exposure']['ma_table_number'] = 4
 
     twcs = wcs.get_wcs(metadata, usecrds=True)
     rd_sca = twcs.toWorld(galsim.PositionD(
@@ -617,7 +617,7 @@ def test_reference_file_crds_match(level):
         rng=rng, psf_keywords=dict(nlambda=1))
 
     # Confirm that CRDS keyword was updated
-    assert im.meta.ref_file.crds.sw_version != '12.3.1'
+    assert im.meta.ref_file.crds.version != '12.3.1'
 
     if (level == 1):
         assert (type(im) is WfiScienceRaw)
@@ -637,7 +637,7 @@ def test_inject_source_into_image():
     coord = SkyCoord(ra=270 * u.deg, dec=66 * u.deg)
     filt = 'F158'
     meta = util.default_image_meta(coord=coord, filter_name=filt,
-                                   detector='WFI07', ma_table=1)
+                                   detector='WFI07', ma_table=4)
     rng_seed = 42
     rng = galsim.UniformDeviate(rng_seed)
     cat = catalog.make_dummy_table_catalog(coord, radius=0.1, bandpasses=[filt],
@@ -658,15 +658,15 @@ def test_inject_source_into_image():
     iminj = image.inject_sources_into_l2(im, catinj, x=[xpos], y=[ypos])
 
     # Test that all pixels near the PSF are different from the original values
-    assert np.all((im.data.value[ypos - 1:ypos + 2, xpos - 1:xpos + 2] !=
-                   iminj.data.value[ypos - 1:ypos + 2, xpos - 1: xpos + 2]))
+    assert np.all((im.data[ypos - 1:ypos + 2, xpos - 1:xpos + 2] !=
+                   iminj.data[ypos - 1:ypos + 2, xpos - 1: xpos + 2]))
 
     # Test that pixels far from the injected source are close to the original image
-    assert np.all(im.data.value[-10:, -10:] == iminj.data.value[-10:, -10:])
+    assert np.all(im.data[-10:, -10:] == iminj.data[-10:, -10:])
 
     # Test that the amount of added flux makes sense
-    fluxeps = flux * romanisim.bandpass.get_abflux('F158') * u.electron / u.s
-    assert np.abs(np.sum(iminj.data - im.data) * parameters.reference_data['gain'] /
+    fluxeps = flux * romanisim.bandpass.get_abflux('F158')  # u.electron / u.s
+    assert np.abs(np.sum(iminj.data - im.data) * parameters.reference_data['gain'].value /
                   fluxeps - 1) < 0.1
 
     # Create log entry and artifacts
@@ -733,7 +733,7 @@ def test_image_input(tmpdir):
     res = image.simulate(meta, tab, usecrds=False, webbpsf=False)
 
     # did we get all the flux?
-    totflux = np.sum(res[0].data.value - np.median(res[0].data.value))
+    totflux = np.sum(res[0].data - np.median(res[0].data))
     expectedflux = (romanisim.bandpass.get_abflux('F087') * np.sum(tab['F087'])
                     / parameters.reference_data['gain'].value)
     assert np.abs(totflux / expectedflux - 1) < 0.1
@@ -743,7 +743,7 @@ def test_image_input(tmpdir):
         x, y = imwcs.toImage(r, d, units=galsim.degrees)
         x = int(x)
         y = int(y)
-        assert res[0].data.value[y, x] > np.median(res[0].data.value) * 5
+        assert res[0].data[y, x] > np.median(res[0].data) * 5
     log.info('DMS228: Successfully added rendered sources from image input; '
              'sources are present and flux matches.')
 
