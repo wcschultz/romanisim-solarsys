@@ -237,7 +237,7 @@ def parse_filename(filename):
     return out
 
 
-def simulate_image_file(args, metadata, cat, rng=None, persist=None):
+def simulate_image_file(args, metadata, cat, rng=None, persist=None, **kwargs):
     """
     Simulate an image and write it to a file.
 
@@ -259,7 +259,7 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None):
     im, extras = image.simulate(
         metadata, cat, usecrds=args.usecrds,
         webbpsf=args.webbpsf, level=args.level, persistence=persist,
-        rng=rng)
+        rng=rng, **kwargs)
 
     # Create metadata for simulation parameter
     romanisimdict = deepcopy(vars(args))
@@ -267,6 +267,9 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None):
         romanisimdict['filename'] = str(romanisimdict['filename'])
     romanisimdict.update(**extras)
     romanisimdict['version'] = romanisim.__version__
+
+    if 'moving_bodies_catalog' in kwargs:
+        romanisimdict['moving_bodies_catalog'] = kwargs['moving_bodies_catalog']
 
     basename = os.path.basename(args.filename)
     obsdata = parse_filename(basename)

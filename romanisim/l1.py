@@ -481,7 +481,7 @@ def make_l1(counts, read_pattern,
             rng=None, seed=None,
             gain=None, inv_linearity=None, crparam=None,
             persistence=None, tstart=None, saturation=None,
-            moving_body_param=None):
+            moving_bodies_catalog=None):
     """Make an L1 image from a counts image.
 
     This apportions the total electrons among the different resultants and adds
@@ -513,8 +513,8 @@ def make_l1(counts, read_pattern,
         Persistence instance describing persistence-affected pixels
     tstart : astropy.time.Time
         time of exposure start
-    moving_body_param : dict
-        Keyword arguments to romanisim.moving_body.simulate_body.  If None, uses stored values in parameters.py.
+    moving_bodies_catalog : astorpy.table.Table
+        Keyword arguments to romanisim.moving_body.simulate_body.  If None, no moving bodies are added.
 
     Returns
     -------
@@ -532,10 +532,9 @@ def make_l1(counts, read_pattern,
         persistence=persistence, tstart=tstart,
         rng=rng, seed=seed)
 
-    if moving_body_param is None:
-        moving_body_param = parameters.moving_body
-    log.info('Adding moving bodies...')
-    resultants = moving_body.simulate_body(resultants, tij, wcs=counts.wcs, rng=rng, seed=seed, **moving_body_param)
+    if moving_bodies_catalog:
+        log.info('Adding moving bodies...')
+        resultants = moving_body.simulate_body(resultants, tij, moving_bodies_catalog, wcs=counts.wcs, rng=rng, seed=seed)
 
     add_ipc(resultants)
 
