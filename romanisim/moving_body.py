@@ -4,9 +4,32 @@ import numpy as np
 import galsim
 import webbpsf as wpsf
 from romanisim import psf
+from romanisim import bandpass
 
 from . import parameters
 from . import log
+
+class MovingBody():
+
+    def __init__(self, magnitude, start_position, angular_radius, angular_speed, direction):
+        self.magnitude = magnitude
+        self.start_position = start_position
+        self.angular_radius = angular_radius
+        self.angular_speed = angular_speed
+        self.direction = direction
+
+        if angular_radius < 0:
+            self.height = 0.0001
+        else:
+            self.height = 2*angular_radius
+
+        cos_dir = np.cos(direction * np.pi / 180.0)
+        sin_dir = np.sin(direction * np.pi / 180.0)
+
+        pixel_scale = parameters.pixel_scale
+        self.x_vel = angular_speed * cos_dir / pixel_scale
+        self.y_vel = angular_speed * sin_dir / pixel_scale
+        
 
 def simulate_body(
     resultants,
@@ -79,15 +102,12 @@ def simulate_body(
     if direction is None:
         direction = parameters.moving_body["direction"]
 
+    angular_speed /= 1e3 # convert mas / s to arcseconds / s
+
     filter_name = parameters.default_parameters_dictionary['instrument']['optical_element']
     detector = parameters.default_parameters_dictionary['instrument']['detector']
 
     detector_ind = int(detector[-2:])
-    
-    moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
-
-    photon_flux = 50000 #1000000 #10.**(magnitude / -2.5)
-    #profile = galsim.DeltaFunction().withFlux(photon_flux)
 
     if angular_radius < 0:
         height = 0.0001
@@ -97,8 +117,14 @@ def simulate_body(
     cos_dir = np.cos(direction * np.pi / 180.0)
     sin_dir = np.sin(direction * np.pi / 180.0)
 
+    pixel_scale = parameters.pixel_scale
     x_vel = angular_speed * cos_dir / pixel_scale
     y_vel = angular_speed * sin_dir / pixel_scale
+    
+    moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
+
+    abflux = bandpass.get_abflux(filter_name)
+    photon_flux = 10.**(magnitude / -2.5) * abflux
 
     body_full_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
 
