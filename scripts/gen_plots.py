@@ -4,16 +4,23 @@ from astropy import table
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from romanisim.parameters import pixel_scale
+import os
 
-def overview_plot(base_file_path, catalog_table):
+def overview_plot(base_file_path):
     l1_file = asdf.open(base_file_path + 'uncal.asdf', 'r')
     l2_file = asdf.open(base_file_path + 'cal.asdf', 'r')
+
+    file_prefix = base_file_path.split('/')[-1]
+    if not os.path.exists(f'./overview_plots/{file_prefix[:-1]}/'):
+        os.mkdir(f'./overview_plots/{file_prefix[:-1]}/')
+
+    catalog_table = l1_file['romanisim']['moving_bodies_catalog']
 
     exp_time = l2_file['roman']['meta']['exposure']['exposure_time']
 
     extra_offset = 20
     for mobj in catalog_table:
-        mb_x, mb_y = mobj['start_position']
+        mb_x, mb_y = mobj['initial_position']
         rad_angle = mobj['direction'] * np.pi / 180
         x_offset = extra_offset * np.sign(np.cos(rad_angle))
         y_offset = extra_offset * np.sign(np.sin(rad_angle))
@@ -33,6 +40,9 @@ def overview_plot(base_file_path, catalog_table):
         end_x = int(mb_x + width * np.cos(rad_angle) + x_offset)
         end_y = int(mb_y + width * np.sin(rad_angle) + y_offset)
 
+        end_x = min(end_x, 4088)
+        end_y = min(end_y, 4088)
+
         slice = np.s_[start_y:end_y, start_x:end_x]
 
         x_for_mesh = np.arange(start_x, end_x) - mb_x
@@ -44,7 +54,10 @@ def overview_plot(base_file_path, catalog_table):
         l2_img = l2_file['roman']['data'][slice]
         jump_mask = np.bitwise_and(l2_file['roman']['dq'][slice], 4, casting='safe') > 0
 
-        max_count = np.max(last_res_trimmed[jump_mask])
+        if np.sum(jump_mask) > 0:
+            max_count = np.max(last_res_trimmed[jump_mask])
+        else:
+            max_count = np.max(last_res_trimmed)
 
         fig, axs = plt.subplots(1,3, figsize=(12,4))
         pcm = axs[0].pcolormesh(xmesh, ymesh, last_res_trimmed, norm=LogNorm(vmax=max_count), shading='nearest')
@@ -64,67 +77,105 @@ def overview_plot(base_file_path, catalog_table):
         for ax in axs:
             ax.set_aspect('equal')
 
-        plt.savefig(f'./overview_plots/l1_l2_overview_m{mobj['magnitude']}_as{mobj['angular_speed']}.png')
+        plt.savefig(f'./overview_plots/{file_prefix[:-1]}/{file_prefix}overview_m{mobj['magnitude']:.2f}_as{mobj['angular_speed']:.2f}.png')
 
 
-"""test_cat = table.Table()
-test_cat["magnitude"] = [15]
-test_cat["start_position"] = [(100,100)] # in pixels
-test_cat["angular_radius"] = [-1] #arcsec
-test_cat["angular_speed"] = [100] # milliarcsec/sec
-test_cat["direction"] = [45]
-overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p1_test_WFI01_', test_cat)
+#overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_full_catalog_MA3_F146_WFI01_')
+#overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_full_catalog_MA11_F146_WFI01_')
+#overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_full_default_catalog_MA3_F146_WFI01_')
+overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_full_default_catalog_MA6_F146_WFI01_')
 
 
-test_cat = table.Table()
-test_cat["magnitude"] = [15]
-test_cat["start_position"] = [(100,100)] # in pixels
-test_cat["angular_radius"] = [-1] #arcsec
-test_cat["angular_speed"] = [50] # milliarcsec/sec
-test_cat["direction"] = [0]
-overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p05_test_WFI01_', test_cat)
+################################
+################################
+################################
 
-test_cat = table.Table()
-test_cat["magnitude"] = [15]
-test_cat["start_position"] = [(100,100)] # in pixels
-test_cat["angular_radius"] = [-1] #arcsec
-test_cat["angular_speed"] = [10] # milliarcsec/sec
-test_cat["direction"] = [0]
-overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p01_test_WFI01_', test_cat) 
+def num_jump_detected_plot(base_file_path):
+    l1_file = asdf.open(base_file_path + 'uncal.asdf', 'r')
+    l2_file = asdf.open(base_file_path + 'cal.asdf', 'r')
 
-test_cat = table.Table()
-test_cat["magnitude"] = [15]
-test_cat["start_position"] = [(100,100)] # in pixels
-test_cat["angular_radius"] = [-1] #arcsec
-test_cat["angular_speed"] = [1] # milliarcsec/sec
-test_cat["direction"] = [0]
-overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p001_test_WFI01_', test_cat)
+    file_prefix = base_file_path.split('/')[-1]
+    if not os.path.exists('./num_jump_det_pix_plots/'):
+        os.mkdir('./num_jump_det_pix_plots/')
 
-test_cat = table.Table()
-test_cat["magnitude"] = [15]
-test_cat["start_position"] = [(100,100)] # in pixels
-test_cat["angular_radius"] = [-1] #arcsec
-test_cat["angular_speed"] = [5] # milliarcsec/sec
-test_cat["direction"] = [0]
-overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p005_test_WFI01_', test_cat)
+    catalog_table = l1_file['romanisim']['moving_bodies_catalog']
 
-test_cat = table.Table()
-test_cat["magnitude"] = [20]
-test_cat["start_position"] = [(100,100)] # in pixels
-test_cat["angular_radius"] = [-1] #arcsec
-test_cat["angular_speed"] = [5] # milliarcsec/sec
-test_cat["direction"] = [0]
-overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p005_m20_test_WFI01_', test_cat)"""
+    exp_time = l2_file['roman']['meta']['exposure']['exposure_time']
 
-test_cat = table.Table()
-test_cat["magnitude"] = [15]
-test_cat["start_position"] = [(2048,2048)] # in pixels
-test_cat["angular_radius"] = [-1] #arcsec
-test_cat["angular_speed"] = [5] # milliarcsec/sec
-test_cat["direction"] = [0]
-overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_class_test_WFI01_', test_cat)
+    extra_offset = 20
+    num_jump_dets = np.zeros(len(catalog_table))
 
-stop
+    for i,mobj in enumerate(catalog_table):
+        mb_x, mb_y = mobj['initial_position']
+        rad_angle = mobj['direction'] * np.pi / 180
+        x_offset = extra_offset * np.sign(np.cos(rad_angle))
+        y_offset = extra_offset * np.sign(np.sin(rad_angle))
+
+        # if sin or cos == 0, ensure there is non-zero width
+        if x_offset == 0:
+            x_offset = extra_offset
+        if y_offset == 0:
+            y_offset = extra_offset
+
+        start_x = int(mb_x - x_offset)
+        start_y = int(mb_y - y_offset)
+
+        pix_speed = mobj['angular_speed'] / 1000 / pixel_scale
+        width = pix_speed * exp_time
+
+        end_x = int(mb_x + width * np.cos(rad_angle) + x_offset)
+        end_y = int(mb_y + width * np.sin(rad_angle) + y_offset)
+
+        end_x = min(end_x, 4088)
+        end_y = min(end_y, 4088)
+
+        slice = np.s_[start_y:end_y, start_x:end_x]
+
+        num_jump_dets[i] = np.sum(np.bitwise_and(l2_file['roman']['dq'][slice], 4, casting='safe') > 0)
+
+    catalog_table['num_jump_dets'] = num_jump_dets
+
+    # time to make the plot
+    unique_mags = np.unique(catalog_table['magnitude'].data)
+    unique_speeds = np.unique(catalog_table['angular_speed'].data)
+
+    fig, axs = plt.subplots(1,2, figsize=(12,6))
+
+    mag_cmap = plt.get_cmap('viridis_r', len(unique_mags))
+    for i, mag in enumerate(unique_mags):
+        mag_mask = catalog_table['magnitude'] == mag
+        mag_cat = catalog_table[mag_mask]
+        axs[0].plot(mag_cat['angular_speed'], mag_cat['num_jump_dets'], color=mag_cmap(i), marker='.', label=f'mag={mag}')
+        
+    axs[0].set_ylabel('Number of Jump Detections in Box')
+    axs[0].set_xlabel('Angular Speed [mas]')
+    axs[0].set_yscale('log')
+    axs[0].set_xscale('log')
+    axs[0].legend(bbox_to_anchor=(0, 1.02), ncol=2, loc='lower left')
+
+    speed_cmap = plt.get_cmap('viridis', len(unique_speeds))
+
+    for i, speed in enumerate(unique_speeds):
+        speed_mask = catalog_table['angular_speed'] == speed
+        speed_cat = catalog_table[speed_mask]
+        axs[1].plot(speed_cat['magnitude'], speed_cat['num_jump_dets'], color=speed_cmap(i), marker='.', label=f'ang. speeed ={speed:.2f}')
+        
+    axs[1].set_ylabel('Number of Jump Detections in Box')
+    axs[1].set_xlabel('AB Magnitude')
+    axs[1].set_yscale('log')
+    axs[1].legend(bbox_to_anchor=(0, 1.02), ncol=2, loc='lower left')
+    plt.tight_layout()
+    plt.savefig(f'./num_jump_det_pix_plots/{file_prefix[:-1]}.png')
+ 
+
+num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_full_default_catalog_MA3_F146_WFI01_')
+num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_full_default_catalog_MA6_F146_WFI01_')
+
+################################
+################################
+################################
+
+
 def plot_jumps(base_file_path, catalog_table):
     l1_file = asdf.open(base_file_path + 'uncal.asdf', 'r')
     l2_file = asdf.open(base_file_path + 'cal.asdf', 'r')
@@ -190,7 +241,7 @@ def plot_jumps(base_file_path, catalog_table):
         plt.savefig(f'./overview_plots/l1_ramps_m{mobj['magnitude']}_as{mobj['angular_speed']}.png')
 
 
-test_cat = table.Table()
+"""test_cat = table.Table()
 test_cat["magnitude"] = [15]
 test_cat["start_position"] = [(100,100)] # in pixels
 test_cat["angular_radius"] = [-1] #arcsec
@@ -204,4 +255,4 @@ test_cat["start_position"] = [(100,100)] # in pixels
 test_cat["angular_radius"] = [-1] #arcsec
 test_cat["angular_speed"] = [5] # milliarcsec/sec
 test_cat["direction"] = [0]
-plot_jumps('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p005_m20_test_WFI01_', test_cat)
+plot_jumps('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p005_m20_test_WFI01_', test_cat)"""
