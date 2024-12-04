@@ -40,8 +40,8 @@ def overview_plot(base_file_path, catalog_table):
 
         xmesh, ymesh = np.meshgrid(x_for_mesh, y_for_mesh)
 
-        last_res_trimmed = l1_file['roman']['data'][-1,4:-4,4:-4].value[slice]
-        l2_img = l2_file['roman']['data'].value[slice]
+        last_res_trimmed = l1_file['roman']['data'][-1,4:-4,4:-4][slice]
+        l2_img = l2_file['roman']['data'][slice]
         jump_mask = np.bitwise_and(l2_file['roman']['dq'][slice], 4, casting='safe') > 0
 
         max_count = np.max(last_res_trimmed[jump_mask])
@@ -116,7 +116,15 @@ test_cat["angular_speed"] = [5] # milliarcsec/sec
 test_cat["direction"] = [0]
 overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p005_m20_test_WFI01_', test_cat)"""
 
+test_cat = table.Table()
+test_cat["magnitude"] = [15]
+test_cat["start_position"] = [(2048,2048)] # in pixels
+test_cat["angular_radius"] = [-1] #arcsec
+test_cat["angular_speed"] = [5] # milliarcsec/sec
+test_cat["direction"] = [0]
+overview_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_class_test_WFI01_', test_cat)
 
+stop
 def plot_jumps(base_file_path, catalog_table):
     l1_file = asdf.open(base_file_path + 'uncal.asdf', 'r')
     l2_file = asdf.open(base_file_path + 'cal.asdf', 'r')

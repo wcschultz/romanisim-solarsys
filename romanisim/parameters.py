@@ -271,8 +271,8 @@ cr = {
 
 # moving body parameters
 moving_body = {
-    "magnitude": 20,
-    "start_position": (100,100), # in pixels
+    "magnitude": 15,
+    "start_position": (2048,2048), # in pixels
     "angular_radius": -1, #arcsec
     "angular_speed": 5, # milliarcsec/sec
     "direction": 0,
