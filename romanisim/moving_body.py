@@ -11,7 +11,7 @@ from . import log
 
 class MovingBody():
 
-    def __init__(self, catalog_row, filter_name):
+    def __init__(self, catalog_row, filter_name, detector_ind):
         self.magnitude = catalog_row['magnitude']
         self.initial_position = catalog_row['initial_position']
         self.angular_radius = catalog_row['angular_radius'] / 1e3 # convert mas / s to 
@@ -23,8 +23,9 @@ class MovingBody():
         else:
             self.height = 2*self.angular_radius
 
-        abflux = bandpass.get_abflux(filter_name)
-        self.photon_flux = 10.**(self.magnitude / -2.5) * abflux
+        abflux = bandpass.get_abflux(filter_name, detector_ind)
+        self.extra_flux_factor = abflux * 4.7 # I'm not sure why this is needed, but it is here...
+        self.photon_flux = 10.**(self.magnitude / -2.5) 
 
         cos_dir = np.cos(self.direction * np.pi / 180.0)
         sin_dir = np.sin(self.direction * np.pi / 180.0)
@@ -43,9 +44,11 @@ class MovingBody():
         self.read_end_position = self.read_start_position + read_movement
 
     def get_galsim_profile(self, delta_t):
+        if self.angular_speed <= 0:
+            return galsim.DeltaFunction().withFlux(self.photon_flux) * self.extra_flux_factor * delta_t
         width = self.angular_speed * delta_t
-        profile = galsim.Box(width, self.height).withFlux(self.photon_flux * delta_t).rotate(galsim.Angle(self.direction, unit=galsim.degrees))
-        return profile
+        profile = galsim.Box(width, self.height).withFlux(self.photon_flux).rotate(galsim.Angle(self.direction, unit=galsim.degrees))
+        return profile * self.extra_flux_factor * delta_t
 
 
 def simulate_body(
@@ -92,13 +95,9 @@ def simulate_body(
         array of n_resultant images giving each resultant
     """
 
-    # TODO: add persistence once prototype is working
     # TODO: add inverse linearity
-    # TODO: add IPC if necessary
     # TODO: try to pass PSF object so it is not created twice (this is the 
     #       longest step of the moving body calculations)
-    # TODO: add WCS querying to allow RA and DEC inputs for more realistic obs
-    #       xpos, ypos = wcs._xy(coord[:, 0], coord[:, 1])
 
     pixel_scale = parameters.pixel_scale
     if wcs is None:
@@ -112,7 +111,7 @@ def simulate_body(
 
     moving_body_list = []
     for row in moving_bodies_catalog:
-        moving_body_list.append(MovingBody(row, filter_name))
+        moving_body_list.append(MovingBody(row, filter_name, detector_ind))
     
     moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
 
@@ -123,9 +122,11 @@ def simulate_body(
     for i_res in range(resultants.shape[0]):
         # make blank reads with PSF at that location
         body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
+
         for read_time in times[i_res]:
             # calculate new position
             elapsed_time = read_time - last_time
+
             for i,mb in enumerate(moving_body_list):
                 mb.calculate_read_end_position(elapsed_time)
                 psf_position = (mb.read_start_position + mb.read_end_position) / 2. #adjust to make the boxes not overlap
@@ -154,7 +155,7 @@ def simulate_body(
             last_time = read_time
 
         # average the reads into a single resultant
-        body_resultant_image /= len(times[i_res])
+        #body_resultant_image /= len(times[i_res])
         body_full_image += body_resultant_image
 
         # add the new PSF to the resultant
