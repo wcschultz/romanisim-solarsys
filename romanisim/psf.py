@@ -20,6 +20,7 @@ from galsim import roman
 from .bandpass import galsim2roman_bandpass, roman2galsim_bandpass
 from romanisim import log
 
+saved_psf = None
 
 def make_one_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
                  chromatic=False, oversample=4, extra_convolution=None, **kw):

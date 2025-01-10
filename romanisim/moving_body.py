@@ -39,16 +39,18 @@ class MovingBody():
         else:
             self.read_start_position = self.initial_position
 
+        self.galsim_profile = self._get_galsim_profile()
+
     def calculate_read_end_position(self, delta_t):
         read_movement = np.array([self.x_vel, self.y_vel]) * delta_t
         self.read_end_position = self.read_start_position + read_movement
 
-    def get_galsim_profile(self, delta_t):
+    def _get_galsim_profile(self):
         if self.angular_speed <= 0:
-            return galsim.DeltaFunction().withFlux(self.photon_flux) * self.extra_flux_factor * delta_t
-        width = self.angular_speed * delta_t
+            return galsim.DeltaFunction().withFlux(self.photon_flux) * self.extra_flux_factor * parameters.read_time
+        width = self.angular_speed * parameters.read_time
         profile = galsim.Box(width, self.height).withFlux(self.photon_flux).rotate(galsim.Angle(self.direction, unit=galsim.degrees))
-        return profile * self.extra_flux_factor * delta_t
+        return profile * self.extra_flux_factor * parameters.read_time
 
 
 def simulate_body(
@@ -113,52 +115,69 @@ def simulate_body(
     for row in moving_bodies_catalog:
         moving_body_list.append(MovingBody(row, filter_name, detector_ind))
     
-    moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
+    if psf.saved_psf is None:
+        moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
+    else:
+        moving_psf = psf.saved_psf
 
-    body_full_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
+    body_accum_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
 
-    last_time = 0
-    
-    for i_res in range(resultants.shape[0]):
-        # make blank reads with PSF at that location
-        body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
+    num_reads = times[-1][-1] / parameters.read_time
+    if num_reads % 1 > 0:
+        log.error('times not divisible by read time!!!!')
+        raise ValueError('Last time in t_ij is not')
+    num_reads = int(num_reads)
+    saved_reads = []
+    for ts in times:
+        saved_reads += [t / parameters.read_time for t in ts]
 
-        for read_time in times[i_res]:
-            # calculate new position
-            elapsed_time = read_time - last_time
+    last_read_number_per_resultant = [ts[-1]/parameters.read_time for ts in times]
 
-            for i,mb in enumerate(moving_body_list):
-                mb.calculate_read_end_position(elapsed_time)
-                psf_position = (mb.read_start_position + mb.read_end_position) / 2. #adjust to make the boxes not overlap
+    body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
+    num_reads_in_resultant = 0
 
-                # add new psf at the read position
-                if hasattr(moving_psf, 'at_position'):
-                    psf0 = moving_psf.at_position(psf_position[1], psf_position[0])
-                else:
-                    psf0 = moving_psf
+    resultant_i = 0
+    for read_i in range(num_reads):
+        read_num = read_i + 1
+        # loop over the moving bodies and add thier points to the accumulated image
+        for i,mb in enumerate(moving_body_list):
+            mb.calculate_read_end_position(parameters.read_time)
+            psf_position = (mb.read_start_position + mb.read_end_position) / 2. #adjust to make the boxes not overlap
 
-                profile = mb.get_galsim_profile(elapsed_time)
-                body_conv = galsim.Convolve(profile, psf0)
-                image_pos = galsim.PositionD(psf_position[0], psf_position[1])
-                pwcs = wcs.local(image_pos)
-                stamp = body_conv.drawImage(center=image_pos, wcs=pwcs)
-                stamp.addNoise(galsim.PoissonNoise(rng))
+            # add new psf at the read position
+            if hasattr(moving_psf, 'at_position'):
+                psf0 = moving_psf.at_position(psf_position[1], psf_position[0])
+            else:
+                psf0 = moving_psf
 
-                overlapping_bounds = stamp.bounds & body_resultant_image.bounds
-                if overlapping_bounds.area() > 0:
-                    body_resultant_image[overlapping_bounds] += stamp[overlapping_bounds]
+            body_conv = galsim.Convolve(mb.galsim_profile, psf0)
+            image_pos = galsim.PositionD(psf_position[0], psf_position[1])
+            pwcs = wcs.local(image_pos)
+            stamp = body_conv.drawImage(center=image_pos, wcs=pwcs)
+            stamp.addNoise(galsim.PoissonNoise(rng))
 
-                # Update the position for the next step
-                moving_body_list[i].read_start_position = mb.read_end_position
+            overlapping_bounds = stamp.bounds & body_resultant_image.bounds
+            if overlapping_bounds.area() > 0:
+                body_accum_image[overlapping_bounds] += stamp[overlapping_bounds]
 
-            # Update time for the next step
-            last_time = read_time
+            # Update the position for the next step
+            moving_body_list[i].read_start_position = mb.read_end_position
 
-        # average the reads into a single resultant
-        #body_resultant_image /= len(times[i_res])
-        body_full_image += body_resultant_image
+        if read_num in saved_reads:
+            body_resultant_image += body_accum_image.copy()
+            num_reads_in_resultant += 1
 
-        # add the new PSF to the resultant
-        resultants[i_res,:,:] += body_full_image.array
+        if read_num in last_read_number_per_resultant:
+            # average the reads into a single resultant
+            body_resultant_image /= num_reads_in_resultant
+
+            # add the new PSF to the resultant
+            resultants[resultant_i,:,:] += body_resultant_image.array
+
+            resultant_i += 1
+            # zero out the resultant array for the next resultant
+            body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
+            num_reads_in_resultant = 0
+
 
     return resultants

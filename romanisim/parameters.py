@@ -153,7 +153,7 @@ read_pattern = {3: [[2], [5], [10], [16], [17]],
                      [95 + x for x in range(32)], 
                      [127 + x for x in range(32)], 
                      [159 + x for x in range(32)], 
-                     [191 + x for x in range(32)], [223]]
+                     [191 + x for x in range(32)], [223]],
                 }
 
 default_parameters_dictionary = {
