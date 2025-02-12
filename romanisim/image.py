@@ -470,8 +470,19 @@ def simulate_counts_generic(image, exptime, objlist=None, psf=None,
         image.quantize()
         rng_numpy_seed = rng.raw()
         rng_numpy = np.random.default_rng(rng_numpy_seed)
+
+        # NOTE: Here, we convert the array of float32 values to int32 (i4), so
+        # we need to "clip" them to be in the valid range first. However, just
+        # clipping with the maximum int32 value (2^31 - 1) isn't sufficient.
+        # This is because `np.float32(2**31 - 1)` is the same value as
+        # `np.float32(2**31)` due to floating point imprecision, and on some
+        # architectures, converting that value to int32 rolls over to a negative
+        # number. To resolve, we use `np.nextafter` to get the previous floating
+        # point number, which is roughly 2^31 - 128.
+        MAX_SAFE_VALUE = np.nextafter(2**31 - 1, 0, dtype=np.float32)
         image.array[:, :] = rng_numpy.binomial(
-            np.clip(image.array, 0, 2**31 - 1).astype('i4'), flat / maxflat)
+            np.clip(image.array, 0, MAX_SAFE_VALUE).astype("i4"), flat / maxflat
+        )
 
     if dark is not None:
         workim = image * 0
@@ -624,7 +635,8 @@ def gather_reference_data(image_mod, usecrds=False):
                     continue
                 if reftype not in refsneeded:
                     continue
-                image_mod.meta.ref_file[reftype] = os.path.basename(reffn)
+                image_mod.meta.ref_file[reftype] = (
+                    'crds://' + os.path.basename(reffn))
         if flatneeded:
             try:
                 flatfile = crds.getreferences(
@@ -633,7 +645,8 @@ def gather_reference_data(image_mod, usecrds=False):
 
                 flat_model = roman_datamodels.datamodels.FlatRefModel(flatfile)
                 flat = flat_model.data[...].copy()
-                image_mod.meta.ref_file['flat'] = os.path.basename(flatfile)
+                image_mod.meta.ref_file['flat'] = (
+                    'crds://' + os.path.basename(flatfile))
             except crds.core.exceptions.CrdsLookupError:
                 log.warning('Could not find flat; using 1')
                 flat = 1
@@ -651,14 +664,17 @@ def gather_reference_data(image_mod, usecrds=False):
         model = roman_datamodels.datamodels.ReadnoiseRefModel(
             reffiles['readnoise'])
         out['readnoise'] = model.data[nborder:-nborder, nborder:-nborder].copy()
+        out['readnoise'] *= u.DN
 
     if isinstance(reffiles['gain'], str):
         model = roman_datamodels.datamodels.GainRefModel(reffiles['gain'])
         out['gain'] = model.data[nborder:-nborder, nborder:-nborder].copy()
+        out['gain'] *= u.electron / u.DN
 
     if isinstance(reffiles['dark'], str):
         model = roman_datamodels.datamodels.DarkRefModel(reffiles['dark'])
         out['dark'] = model.dark_slope[nborder:-nborder, nborder:-nborder].copy()
+        out['dark'] *= u.DN / u.s
         out['dark'] *= out['gain']
     if isinstance(out['dark'], u.Quantity):
         out['dark'] = out['dark'].to(u.electron / u.s).value
@@ -683,6 +699,7 @@ def gather_reference_data(image_mod, usecrds=False):
         saturation = roman_datamodels.datamodels.SaturationRefModel(
             reffiles['saturation'])
         saturation = saturation.data[nborder:-nborder, nborder:-nborder].copy()
+        saturation *= u.DN
         out['saturation'] = saturation
 
     out['reffiles'] = reffiles
@@ -967,8 +984,8 @@ def inject_sources_into_l2(model, cat, x=None, y=None, psf=None, rng=None,
         rng = galsim.UniformDeviate(123)
 
     if x is None or y is None:
-        x, y = model.meta.wcs.numerical_inverse(cat['ra'], cat['dec'],
-                                                with_bounding_box=False)
+        x, y = model.meta.wcs.numerical_inverse(
+            cat['ra'].value, cat['dec'].value, with_bounding_box=False)
 
     filter_name = model.meta.instrument.optical_element
     cat = catalog.table_to_catalog(cat, [filter_name])

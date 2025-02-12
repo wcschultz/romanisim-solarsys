@@ -142,7 +142,7 @@ def inject_sources_into_l3(model, cat, x=None, y=None, psf=None, rng=None,
         rng = galsim.UniformDeviate(seed)
 
     if x is None or y is None:
-        x, y = model.meta.wcs.numerical_inverse(cat['ra'], cat['dec'],
+        x, y = model.meta.wcs.numerical_inverse(cat['ra'].value, cat['dec'].value,
                                                 with_bounding_box=False)
 
     filter_name = model.meta.basic.optical_element
@@ -595,7 +595,7 @@ def simulate_cps(image, filter_name, efftimes, objlist=None, psf=None,
         objinfo['y'] = ypos
         objinfo['counts'] = objinfo0['counts']
         objinfo['time'] = objinfo0['time']
-        extras['objinfo'] = objinfo
+        extras['simcatobj'] = objinfo
 
     if sky is not None:
         # in e / s / output pixel
@@ -756,7 +756,7 @@ def add_more_metadata(metadata, efftimes, filter_name, wcs, shape, nexposures):
     metadata['resample']['pointings'] = nexposures
     metadata['resample']['product_exposure_time'] = (
         metadata['basic']['max_exposure_time'])
-    xref, yref = wcs.world_to_pixel(
+    xref, yref = wcs.world_to_pixel_values(
         metadata['wcsinfo']['ra_ref'], metadata['wcsinfo']['dec_ref'])
     metadata['wcsinfo']['x_ref'] = xref
     metadata['wcsinfo']['y_ref'] = yref
