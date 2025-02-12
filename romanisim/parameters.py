@@ -300,3 +300,6 @@ V3IdlYAngle = -60
 
 # fiducial WFI pixel scale in arcseconds
 pixel_scale = 0.11
+
+####### Test parameters for saving
+saved_max_flat = None

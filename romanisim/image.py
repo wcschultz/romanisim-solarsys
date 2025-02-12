@@ -427,6 +427,7 @@ def simulate_counts_generic(image, exptime, objlist=None, psf=None,
         log.warning('max(flat) > 1.1; this seems weird?!')
     if maxflat > 2:
         log.error('max(flat) > 2; this seems really weird?!')
+    parameters.saved_max_flat = maxflat
     # how to deal with the flat field?  We artificially inflate the
     # exposure time of each source by maxflat when rendering.  And then we
     # do a binomial sampling of the total number of photons obtained per pixel

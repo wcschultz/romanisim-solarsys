@@ -25,6 +25,8 @@ class MovingBody():
 
         abflux = bandpass.get_abflux(filter_name, detector_ind)
         self.extra_flux_factor = abflux * 4.7 # I'm not sure why this is needed, but it is here...
+        if parameters.saved_max_flat:
+            self.extra_flux_factor *= parameters.saved_max_flat
         self.photon_flux = 10.**(self.magnitude / -2.5) 
 
         cos_dir = np.cos(self.direction * np.pi / 180.0)
