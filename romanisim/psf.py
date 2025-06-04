@@ -4,7 +4,7 @@ galsim.roman has an implementation of Roman's point spread function (PSF) based 
 the aperture and some estimates for the wavefront errors over the aperture as
 described by amplitudes of various Zernicke modes.  This seems like a very good
 approach, but we want to add here a mode using the official PSFs coming out of
-webbpsf, which takes a very similar overall approach.
+stpsf, which takes a very similar overall approach.
 
 galsim's InterpolatedImage class makes this straightforward.  Future work
 should consider the following:
@@ -22,12 +22,12 @@ from romanisim import log
 
 saved_psf = None
 
-def make_one_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
+def make_one_psf(sca, filter_name, wcs=None, stpsf=True, pix=None,
                  chromatic=False, oversample=4, extra_convolution=None, **kw):
     """Make a PSF profile for Roman at a specific detector location.
 
     Can construct both PSFs using galsim's built-in galsim.roman.roman_psfs
-    routine, or can use webbpsf.
+    routine, or can use stpsf.
 
     Parameters
     ----------
@@ -37,16 +37,16 @@ def make_one_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
         name of filter
     wcs : callable (optional)
         function giving mapping from pixels to sky for use in computing local
-        scale of image for webbpsf PSFs
+        scale of image for stpsf PSFs
     pix : tuple (float, float)
         pixel location of PSF on focal plane
     oversample : int
-        oversampling with which to sample WebbPSF PSF
+        oversampling with which to sample Stpsf PSF
     extra_convolution : galsim.gsobject.GSObject or None
         Additional convolution to add to PSF
     **kw : dict
-        Additional keywords passed to galsim.roman.getPSF or webbpsf.calc_psf,
-        depending on whether webbpsf is set.
+        Additional keywords passed to galsim.roman.getPSF or stpsf.calc_psf,
+        depending on whether stpsf is set.
 
     Returns
     -------
@@ -57,7 +57,7 @@ def make_one_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
     pix = pix if pix is not None else (roman.n_pix // 2, roman.n_pix // 2)
     if wcs is None:
         log.warning('wcs is None; unlikely to get orientation of PSF correct.')
-    if not webbpsf:
+    if not stpsf:
         filter_name = roman2galsim_bandpass[filter_name]
         defaultkw = {'pupil_bin': 8}
         if chromatic:
@@ -75,15 +75,15 @@ def make_one_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
         return res
     if chromatic:
         log.warning('romanisim does not yet support chromatic PSFs '
-                    'with webbpsf')
-    import webbpsf as wpsf
+                    'with stpsf')
+    import stpsf as wpsf
     filter_name = galsim2roman_bandpass[filter_name]
     wfi = wpsf.WFI()
     wfi.detector = f'SCA{sca:02d}'
     wfi.filter = filter_name
     wfi.detector_position = pix
     psf = wfi.calc_psf(oversample=oversample, **kw)
-    # webbpsf doesn't do distortion
+    # stpsf doesn't do distortion
     # calc_psf gives something aligned with the pixels, but with
     # a constant pixel scale equal to wfi.pixelscale / oversample.
     # we need to get the appropriate rotated WCS that matches this
@@ -96,14 +96,14 @@ def make_one_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
         newwcs = galsim.JacobianWCS(*(rotmat.ravel() * newscale))
         # we are making a new, orthogonal, isotropic matrix for the PSF with the
         # appropriate pixel scale.  This is intended to be the WCS for the PSF
-        # produced by webbpsf.
+        # produced by stpsf.
     else:
         newwcs = galsim.JacobianWCS(*(np.array([1, 0, 0, 1]) * newscale))
         # just use a default North = up WCS
     gimg = galsim.Image(psf[0].data, wcs=newwcs)
 
-    # This code block could be used to fix the centroid of WebbPSF calculated
-    # PSFs to be zero.  This makes downstream comparisons with WebbPSF
+    # This code block could be used to fix the centroid of Stpsf calculated
+    # PSFs to be zero.  This makes downstream comparisons with Stpsf
     # PSFs a little harder, and so is currently disabled.  But it is
     # recommended by Marshall Perrin and is probably what we should do.
 
@@ -126,7 +126,7 @@ def make_one_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
     return intimg
 
 
-def make_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
+def make_psf(sca, filter_name, wcs=None, stpsf=True, pix=None,
              chromatic=False, variable=False, extra_convolution=None, **kw):
     """Make a PSF profile for Roman.
 
@@ -141,7 +141,7 @@ def make_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
         name of filter
     wcs : callable (optional)
         function giving mapping from pixels to sky for use in computing local
-        scale of image for webbpsf PSFs
+        scale of image for stpsf PSFs
     pix : tuple (float, float)
         pixel location of PSF on focal plane
     variable : bool
@@ -158,13 +158,13 @@ def make_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
         rendering scenes.
     """
     if not variable:
-        return make_one_psf(sca, filter_name, wcs=wcs, webbpsf=webbpsf,
+        return make_one_psf(sca, filter_name, wcs=wcs, stpsf=stpsf,
                             pix=pix, chromatic=chromatic,
                             extra_convolution=extra_convolution, **kw)
     elif pix is not None:
         raise ValueError('cannot set both pix and variable')
     buf = 49
-    # WebbPSF complains if we get too close to (0, 0) for some reason.
+    # Stpsf complains if we get too close to (0, 0) for some reason.
     # For other corners one can go to within a fraction of a pixel.
     # if we go larger than 49 we have to change some of the tests, which use a 100x100 image.
     corners = dict(
@@ -172,7 +172,7 @@ def make_psf(sca, filter_name, wcs=None, webbpsf=True, pix=None,
         ul=[buf, roman.n_pix - buf], ur=[roman.n_pix - buf, roman.n_pix - buf])
     psfs = dict()
     for corner, pix in corners.items():
-        psfs[corner] = make_one_psf(sca, filter_name, wcs=wcs, webbpsf=webbpsf,
+        psfs[corner] = make_one_psf(sca, filter_name, wcs=wcs, stpsf=stpsf,
                                     pix=pix, chromatic=chromatic,
                                     extra_convolution=extra_convolution, **kw)
     return VariablePSF(corners, psfs)
