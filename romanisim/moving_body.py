@@ -2,7 +2,6 @@
 """
 import numpy as np
 import galsim
-import webbpsf as wpsf
 from romanisim import psf
 from romanisim import bandpass
 
