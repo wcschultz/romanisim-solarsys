@@ -24,9 +24,8 @@ class MovingBody():
             self.height = 2*self.angular_radius
 
         abflux = bandpass.get_abflux(filter_name, detector_ind)
-        self.extra_flux_factor = abflux * 4.7 # I'm not sure why this is needed, but it is here...
-        if parameters.saved_max_flat:
-            self.extra_flux_factor *= parameters.saved_max_flat
+        self.extra_flux_factor = abflux 
+        
         self.photon_flux = 10.**(self.magnitude / -2.5) 
 
         cos_dir = np.cos(self.direction * np.pi / 180.0)
@@ -63,6 +62,9 @@ def simulate_body(
     rng=None,
     seed=47,
     oversample=4,
+    inv_linearity=None,
+    filter_name=None,
+    detector_number=None
 ):
     """Adds a moving body to an existing image.
 
@@ -99,9 +101,7 @@ def simulate_body(
         array of n_resultant images giving each resultant
     """
 
-    # TODO: add inverse linearity
-    # TODO: try to pass PSF object so it is not created twice (this is the 
-    #       longest step of the moving body calculations)
+    ## TODO: Implement persistence
 
     pixel_scale = parameters.pixel_scale
     if wcs is None:
@@ -109,16 +109,12 @@ def simulate_body(
     if rng is None:
         rng = galsim.BaseDeviate(seed)
 
-    filter_name = parameters.default_parameters_dictionary['instrument']['optical_element']
-    detector = parameters.default_parameters_dictionary['instrument']['detector']
-    detector_ind = int(detector[-2:])
-
     moving_body_list = []
     for row in moving_bodies_catalog:
-        moving_body_list.append(MovingBody(row, filter_name, detector_ind))
+        moving_body_list.append(MovingBody(row, filter_name, detector_number))
     
     if psf.saved_psf is None:
-        moving_psf = psf.make_psf(detector_ind, filter_name, wcs=wcs, variable=False, oversample=oversample) ## TODO: should variable=True?
+        moving_psf = psf.make_psf(detector_number, filter_name, wcs=wcs, variable=True, oversample=oversample)
     else:
         moving_psf = psf.saved_psf
 
@@ -128,20 +124,20 @@ def simulate_body(
     if num_reads % 1 > 0:
         log.error('times not divisible by read time!!!!')
         raise ValueError('Last time in t_ij is not')
-    num_reads = int(num_reads)
+    num_reads = round(num_reads)
     saved_reads = []
     for ts in times:
-        saved_reads += [t / parameters.read_time for t in ts]
+        saved_reads += [round(t / parameters.read_time) for t in ts]
 
-    last_read_number_per_resultant = [ts[-1]/parameters.read_time for ts in times]
+    last_read_number_per_resultant = [round(ts[-1]/parameters.read_time) for ts in times]
 
     body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
-    num_reads_in_resultant = 0
 
+    num_reads_in_resultant = 0
     resultant_i = 0
     for read_i in range(num_reads):
         read_num = read_i + 1
-        # loop over the moving bodies and add thier points to the accumulated image
+        # loop over the moving bodies and add their points to the accumulated image
         for i,mb in enumerate(moving_body_list):
             mb.calculate_read_end_position(parameters.read_time)
             psf_position = (mb.read_start_position + mb.read_end_position) / 2. #adjust to make the boxes not overlap
@@ -166,13 +162,19 @@ def simulate_body(
             moving_body_list[i].read_start_position = mb.read_end_position
 
         if read_num in saved_reads:
-            body_resultant_image += body_accum_image.copy()
+            if inv_linearity is not None:
+                # Apply inverse linearity
+                body_resultant_image += inv_linearity.apply(
+                        body_accum_image.array, electrons=True)
+            else:
+                body_resultant_image += body_accum_image.copy()
+
             num_reads_in_resultant += 1
 
         if read_num in last_read_number_per_resultant:
             # average the reads into a single resultant
             body_resultant_image /= num_reads_in_resultant
-
+            
             # add the new PSF to the resultant
             resultants[resultant_i,:,:] += body_resultant_image.array
 

@@ -56,7 +56,8 @@ read_pattern = {3: [[2], [5], [10], [16], [17]],
                     [107 + x for x in range(16)], 
                     [123 + x for x in range(16)],
                     [139 + x for x in range(16)], [155]],
-                9: [[1], [2], [3, 4], [5 + x for x in range(8)], [13 + x for x in range(8)],
+                9: [[1], [2], [3, 4], [5 + x for x in range(8)], 
+                    [13 + x for x in range(8)],
                     [21 + x for x in range(12)],
                     [33 + x for x in range(12)],
                     [45 + x for x in range(12)],
@@ -300,6 +301,3 @@ V3IdlYAngle = -60
 
 # fiducial WFI pixel scale in arcseconds
 pixel_scale = 0.11
-
-####### Test parameters for saving
-saved_max_flat = None

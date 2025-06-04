@@ -427,7 +427,6 @@ def simulate_counts_generic(image, exptime, objlist=None, psf=None,
         log.warning('max(flat) > 1.1; this seems weird?!')
     if maxflat > 2:
         log.error('max(flat) > 2; this seems really weird?!')
-    parameters.saved_max_flat = maxflat
     # how to deal with the flat field?  We artificially inflate the
     # exposure time of each source by maxflat when rendering.  And then we
     # do a binomial sampling of the total number of photons obtained per pixel
@@ -439,6 +438,7 @@ def simulate_counts_generic(image, exptime, objlist=None, psf=None,
     flux_to_counts_factor = exptime * maxflat
     if not chromatic:
         flux_to_counts_factor *= zpflux
+
     xposk = xpos[keep] if xpos is not None else None
     yposk = ypos[keep] if ypos is not None else None
     objinfokeep = add_objects_to_image(
@@ -824,6 +824,7 @@ def simulate(metadata, objlist,
             tstart=image_mod.meta.exposure.start_time,
             persistence=persistence,
             saturation=saturation,
+            metadata=image_mod.meta,
             **kwargs)
     if level == 1:
         im, extras = romanisim.l1.make_asdf(

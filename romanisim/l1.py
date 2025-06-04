@@ -480,7 +480,7 @@ def make_l1(counts, read_pattern,
             read_noise=None, pedestal_extra_noise=None,
             rng=None, seed=None,
             gain=None, inv_linearity=None, crparam=None,
-            persistence=None, tstart=None, saturation=None,
+            persistence=None, tstart=None, saturation=None, metadata=None,
             moving_bodies_catalog=None):
     """Make an L1 image from a counts image.
 
@@ -534,7 +534,7 @@ def make_l1(counts, read_pattern,
 
     if moving_bodies_catalog:
         log.info('Adding moving bodies...')
-        resultants = moving_body.simulate_body(resultants, tij, moving_bodies_catalog, wcs=counts.wcs, rng=rng, seed=seed)
+        resultants = moving_body.simulate_body(resultants, tij, moving_bodies_catalog, wcs=counts.wcs, rng=rng, seed=seed, inv_linearity=inv_linearity, filter_name=metadata['instrument']['optical_element'], detector_number=int(metadata['instrument']['detector'][3:]))
 
     add_ipc(resultants)
 
