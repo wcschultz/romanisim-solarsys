@@ -9,7 +9,6 @@ authors = [
 classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Astronomy",
-    "License :: OSI Approved :: BSD License",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX",
     "Programming Language :: Python :: 3",
@@ -18,24 +17,22 @@ classifiers = [
 ]
 dependencies = [
     "asdf >=3.3.0",
-    "astropy >=5.3",
-    "crds >=11.16.16",
+    "astropy >=6.0",
+    "crds >=11.16.21",
     "defusedxml >=0.5.0",
     "galsim >=2.5.1",
     "rad >=0.23.0",
     "roman_datamodels >=0.23.0",
-    "gwcs >=0.19.0",
+    "gwcs >=0.22.1, <0.24.0",
     "jsonschema >=4.8",
     "numpy >=1.24",
-    "webbpsf >=1.2.1",
+    "stpsf >=2.0.0",
     "Cython >=0.29.21",
 ]
+license-files = ["LICENSE"]
 dynamic = [
     "version",
 ]
-
-[project.license]
-file = "LICENSE"
 
 [project.optional-dependencies]
 docs = [
@@ -81,7 +78,7 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-minversion = 4.6
+minversion = "4.6"
 norecursedirs = [
     "docs/_build",
     "docs/exts",
@@ -94,6 +91,9 @@ doctest_rst = "enabled"
 markers = [
     "soctests: run only the SOC tests in the suite.",
     "bigdata: uses a lot of data.",
+]
+addopts = [
+    "--color=yes",  # Enable colored output by default
 ]
 
 [tool.coverage.run]
