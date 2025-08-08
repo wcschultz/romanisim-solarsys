@@ -275,7 +275,7 @@ def format_filename(filename, sca, bandpass=None, pretend_spectral=None):
     return pname.with_name(bname.format(*args, **kwargs))
 
 
-def simulate_image_file(args, metadata, cat, rng=None, persist=None):
+def simulate_image_file(args, metadata, cat, rng=None, persist=None, moving_bodies_catalog=None):
     """
     Simulate an image and write it to a file.
 
@@ -305,7 +305,7 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None):
     im, extras = image.simulate(
         metadata, cat, usecrds=args.usecrds,
         stpsf=args.stpsf, level=args.level, persistence=persist,
-        rng=rng)
+        rng=rng, moving_bodies_catalog=moving_bodies_catalog)
 
     # Create metadata for simulation parameter
     romanisimdict = deepcopy(vars(args))
@@ -313,6 +313,9 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None):
         romanisimdict['filename'] = str(romanisimdict['filename'])
     romanisimdict.update(**extras)
     romanisimdict['version'] = romanisim.__version__
+    
+    if moving_bodies_catalog is not None:
+        romanisimdict['moving_bodies_catalog'] = moving_bodies_catalog
 
     basename = os.path.basename(filename)
     obsdata = parse_filename(basename)
