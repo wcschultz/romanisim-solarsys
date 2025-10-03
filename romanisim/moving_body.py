@@ -118,7 +118,8 @@ def simulate_body(
         moving_psf = psf.saved_psf
 
     body_accum_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
-
+    body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
+    
     num_reads = times[-1][-1] / parameters.read_time
     if num_reads % 1 > 0:
         log.error('times not divisible by read time!!!!')
@@ -129,8 +130,6 @@ def simulate_body(
         saved_reads += [round(t / parameters.read_time) for t in ts]
 
     last_read_number_per_resultant = [round(ts[-1]/parameters.read_time) for ts in times]
-
-    body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
 
     num_reads_in_resultant = 0
     resultant_i = 0
@@ -171,11 +170,8 @@ def simulate_body(
             num_reads_in_resultant += 1
 
         if read_num in last_read_number_per_resultant:
-            # average the reads into a single resultant
-            body_resultant_image /= num_reads_in_resultant
-            
             # add the new PSF to the resultant
-            resultants[resultant_i,:,:] += body_resultant_image.array
+            resultants[resultant_i,:,:] += body_resultant_image.array / num_reads_in_resultant
 
             resultant_i += 1
             # zero out the resultant array for the next resultant

@@ -303,9 +303,9 @@ def num_jump_detected_plot(base_file_path):
 #num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_default_no_cr_catalog_MA9_F146_WFI01_')
 #num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_default_no_cr_catalog_MA11_F146_WFI01_')
 
-num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_proposal__MA4_F146_WFI11_')
-num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_proposal__MA7_F146_WFI11_')
-num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_proposal__MA11_F146_WFI11_')
+#num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_proposal__MA4_F146_WFI11_')
+#num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_proposal__MA7_F146_WFI11_')
+#num_jump_detected_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_proposal__MA11_F146_WFI11_')
 
 ################################
 ################################
@@ -462,3 +462,90 @@ test_cat["angular_radius"] = [-1] #arcsec
 test_cat["angular_speed"] = [5] # milliarcsec/sec
 test_cat["direction"] = [0]
 plot_jumps('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_0p005_m20_test_WFI01_', test_cat)"""
+
+
+def resultant_dq_plot(base_file_path):
+    l1_file = asdf.open(base_file_path + 'uncal.asdf', 'r')
+    l2_file = asdf.open(base_file_path + 'cal.asdf', 'r')
+    resdq_file = asdf.open(base_file_path + 'resdq.asdf', 'r')
+
+    file_prefix = base_file_path.split('/')[-1]
+    if not os.path.exists(f'./res_dq_plots/{file_prefix[:-1]}/'):
+        os.mkdir(f'./res_dq_plots/{file_prefix[:-1]}/')
+
+    catalog_table = l1_file['romanisim']['moving_bodies_catalog']
+
+    exp_time = l2_file['roman']['meta']['exposure']['exposure_time']
+
+    extra_offset = 20
+    for mobj in catalog_table:
+        mb_x, mb_y = mobj['initial_position']
+        rad_angle = mobj['direction'] * np.pi / 180
+        x_offset = extra_offset * np.sign(np.cos(rad_angle))
+        y_offset = extra_offset * np.sign(np.sin(rad_angle))
+
+        # if sin or cos == 0, ensure there is non-zero width
+        if x_offset == 0:
+            x_offset = extra_offset
+        if y_offset == 0:
+            y_offset = extra_offset
+
+        start_x = int(mb_x - x_offset)
+        start_y = int(mb_y - y_offset)
+
+        pix_speed = mobj['angular_speed'] / 1000 / pixel_scale
+        width = pix_speed * exp_time
+
+        end_x = int(mb_x + width * np.cos(rad_angle) + x_offset)
+        end_y = int(mb_y + width * np.sin(rad_angle) + y_offset)
+
+        end_x = min(end_x, 4088)
+        end_y = min(end_y, 4088)
+
+        x_for_mesh = np.arange(start_x, end_x) - mb_x
+        y_for_mesh = np.arange(start_y, end_y) - mb_y
+        res_for_mesh = np.arange(resdq_file['resultantdq'].shape[0]) + 1 
+
+        xmesh, ymesh = np.meshgrid(x_for_mesh, y_for_mesh)
+        resx_mesh, xres_mesh = np.meshgrid(res_for_mesh, x_for_mesh)
+        resy_mesh, yres_mesh = np.meshgrid(res_for_mesh, y_for_mesh)
+
+        slice = np.s_[:,start_y:end_y, start_x:end_x]
+
+        res_dq_slice = resdq_file['resultantdq'][:,4:-4, 4:-4][slice]
+        
+
+        #fig = plt.figure()
+        #ax = fig.add_subplot(projection='3d')
+        #ax.scatter(res_inds, y_inds, x_inds)
+        #ax.set_aspect('equal')
+
+        def logical_or(x):
+            return int(np.sum(x) > 0)
+
+        fig, axs = plt.subplots(1,3, figsize=(12,4))
+        axs[0].pcolormesh(xmesh, ymesh, np.apply_along_axis(logical_or, 0, res_dq_slice), shading='nearest')
+        axs[0].set_title('All flagged pixels in L1')
+        axs[0].set_ylabel('Y')
+        axs[0].set_xlabel('X')
+
+        axs[1].pcolormesh(resy_mesh, yres_mesh, np.apply_along_axis(logical_or, 2, res_dq_slice).transpose(), shading='nearest')
+        axs[1].set_title('Y Separation')
+        axs[1].set_ylabel('Y')
+        axs[1].set_xlabel('Resultant')
+
+        axs[2].pcolormesh(resx_mesh, xres_mesh, np.apply_along_axis(logical_or, 1, res_dq_slice).transpose(), shading='nearest')
+        axs[2].set_title('X Separation')
+        axs[2].set_ylabel('X')
+        axs[2].set_xlabel('Resultant')
+    
+        for ax in axs:
+            ax.set_aspect('equal')
+
+        plt.tight_layout()
+        plt.savefig(f'./res_dq_plots/{file_prefix[:-1]}/{file_prefix}resdq_m{mobj['magnitude']:.2f}_as{mobj['angular_speed']:.2f}.png')
+        plt.close(fig)
+
+#resultant_dq_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_w_star_no_cr_vis_MA4_F146_WFI01_')
+resultant_dq_plot('/Users/wschultz/Roman_Solar_System/romanisim-solarsys/scripts/mb_proposal__MA7_F146_WFI11_')
+

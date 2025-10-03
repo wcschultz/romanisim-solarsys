@@ -271,7 +271,10 @@ def apportion_counts_to_resultants(
 
     if persistence is not None:
         tstart = tstart.mjd
-
+        
+    if crparam is not None:
+        log.info('Including CRs')
+    
     # Loop over read probabilities
     for i, pi in enumerate(pij):
         # Reset resultant counts

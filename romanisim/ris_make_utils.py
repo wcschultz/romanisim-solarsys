@@ -301,11 +301,13 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None, moving_bodi
     filename = format_filename(args.filename, args.sca, bandpass=args.bandpass,
                                pretend_spectral=args.pretend_spectral)
 
+    crparam = getattr(args, 'crparam', dict())
+
     # Simulate image
     im, extras = image.simulate(
         metadata, cat, usecrds=args.usecrds,
         stpsf=args.stpsf, level=args.level, persistence=persist,
-        rng=rng, moving_bodies_catalog=moving_bodies_catalog)
+        rng=rng, moving_bodies_catalog=moving_bodies_catalog, crparam=crparam)
 
     # Create metadata for simulation parameter
     romanisimdict = deepcopy(vars(args))
