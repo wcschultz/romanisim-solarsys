@@ -1,19 +1,17 @@
 """
 Unit tests for wcs module.
 """
-import os
 import copy
 import numpy as np
 from astropy.modeling import rotations, projections, models
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astropy.time import Time
-from romanisim import wcs, util, parameters
+from romanisim import util
+from romanisim.models import wcs, parameters
 import galsim
-import pytest
 
 import roman_datamodels
-import roman_datamodels.maker_utils as maker_utils
 
 
 def make_fake_distortion_function():
@@ -42,12 +40,12 @@ def test_wcs():
     distortion = make_fake_distortion_function()
     cc = SkyCoord(ra=0 * u.deg, dec=0 * u.deg)
     gwcs = wcs.make_wcs(cc, distortion)
-    assert cc.separation(gwcs(0, 0, with_units=True)).to(u.arcsec).value < 1e-3
+    assert cc.separation(gwcs.pixel_to_world(0, 0)).to(u.arcsec).value < 1e-3
     cc2 = SkyCoord(ra=0 * u.deg, dec=0.11 * u.arcsec)
-    assert cc2.separation(gwcs(0, 1, with_units=True)).to(u.arcsec).value < 1e-2
+    assert cc2.separation(gwcs.pixel_to_world(0, 1)).to(u.arcsec).value < 1e-2
     # a tenth of a pixel
     cc3 = SkyCoord(ra=0.11 * u.arcsec, dec=0 * u.deg)
-    assert cc3.separation(gwcs(1, 0, with_units=True)).to(u.arcsec).value < 1e-2
+    assert cc3.separation(gwcs.pixel_to_world(1, 0)).to(u.arcsec).value < 1e-2
     wcsgalsim = wcs.GWCS(gwcs)
     assert wcsgalsim.wcs is gwcs
     assert ((wcsgalsim.origin.x == 0) and (wcsgalsim.origin.y == 0))
@@ -58,8 +56,15 @@ def test_wcs():
     cc2 = wcsgalsim2.toWorld(pos)
     assert np.allclose([cc1.ra / galsim.degrees, cc1.dec / galsim.degrees],
                        [cc2.ra / galsim.degrees, cc2.dec / galsim.degrees])
+    print(cc1)
+    print(wcsgalsim)
     pos2 = wcsgalsim.toImage(cc1)
     assert np.allclose([pos.x, pos.y], [pos2.x, pos2.y])
+
+    # Using direct unit input to Galsim we should get identical results
+    pos3 = wcsgalsim.toImage(cc1.ra.deg, cc1.dec.deg, units="deg")
+    assert np.all((pos2.x, pos2.y) == pos3)
+ 
     # also try some arrays
     xx = np.random.uniform(0, 4096, 100)
     yy = np.random.uniform(0, 4096, 100)
@@ -119,12 +124,6 @@ def test_wcs_from_fits_header():
     assert np.max(sep) < 1e-5
 
 
-@pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason=(
-        "Roman CRDS servers are not currently available outside the internal network"
-    ),
-)
 def test_wcs_crds_match():
     # Set up parameters for simulation run
 
@@ -133,17 +132,8 @@ def test_wcs_crds_match():
     metadata['instrument']['optical_element'] = 'F158'
     metadata['exposure']['ma_table_number'] = 1
 
-    # Create Image model to track validation
-    meta = maker_utils.mk_common_meta()
-    meta["photometry"] = maker_utils.mk_photometry()
-
-    for key in metadata.keys():
-        meta[key].update(metadata[key])
-    meta['wcs'] = None
-
-    image_node = maker_utils.mk_level2_image()
-    image_node['meta'] = meta
-    image_mod = roman_datamodels.datamodels.ImageModel(image_node)
+    image_mod = roman_datamodels.datamodels.ImageModel.create_fake_data({"meta": metadata})
+    image_mod.meta.wcs = None
 
     twcs = wcs.get_wcs(image_mod, usecrds=True)
 

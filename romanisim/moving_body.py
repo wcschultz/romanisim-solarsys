@@ -3,9 +3,8 @@
 import numpy as np
 import galsim
 from romanisim import psf
-from romanisim import bandpass
+from romanisim.models import bandpass, parameters
 
-from . import parameters
 from . import log
 
 class MovingBody():

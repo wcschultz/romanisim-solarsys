@@ -2,23 +2,23 @@ name: build
 
 on:
   release:
-    types: [ released ]
+    types: [released]
   pull_request:
   workflow_dispatch:
 
 jobs:
   build:
-    uses: OpenAstronomy/github-actions-workflows/.github/workflows/publish.yml@8c0fde6f7e926df6ed7057255d29afa9c1ad5320  # v1.16.0
+    uses: OpenAstronomy/github-actions-workflows/.github/workflows/publish.yml@2835f0cacddf3f8de198db9afdb5354a5cebe0ef # v2.6.3
     with:
       env: |
         FFTW_DIR: /opt/homebrew/opt/fftw/lib/
       targets: |
         # Linux wheels
-        - cp3*-manylinux_x86_64
+        - cp3*[!t]-manylinux_x86_64
         # MacOS wheels
-        - cp3*-macosx_x86_64
+        - cp3*[!t]-macosx_x86_64
         # MacOS arm64 wheels
-        - cp3*-macosx_arm64
+        - cp3*[!t]-macosx_arm64
       sdist: true
       test_command: python -c "from romanisim import ramp_fit_casertano"
       upload_to_pypi: ${{ (github.event_name == 'release') && (github.event.action == 'released') }}

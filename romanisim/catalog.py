@@ -3,18 +3,20 @@
 This module provides basic routines to allow romanisim to render scenes
 based on catalogs of sources in those scenes.
 """
+import os
 import dataclasses
 import numpy as np
 import galsim
-from galsim import roman
 from astropy import coordinates, table
 from astropy import units as u
 from astropy.io import fits
+import astropy_healpix
 import astropy.time
-from astroquery.gaia import Gaia
 from romanisim import gaia as rsim_gaia
 from . import util, log
-import romanisim.bandpass
+import romanisim.models.bandpass
+import yaml
+from romanisim.models import parameters
 
 # COSMOS constants taken from the COSMOS2020 paper:
 # https://arxiv.org/pdf/2110.13923
@@ -28,6 +30,9 @@ COSMOS_PIX_TO_ARCSEC = 0.15
 F146_J_COEFF = 0.46333417914234964
 F158_H_COEFF = 0.823395077391525
 F184_KS_COEFF = 0.3838145747397368
+
+# Bandpass filters
+BANDPASSES = set(romanisim.models.bandpass.galsim2roman_bandpass.values())
 
 
 @dataclasses.dataclass
@@ -78,20 +83,20 @@ def make_dummy_catalog(coord,
         rng = galsim.UniformDeviate(seed)
 
     if galaxy_sample_file_name is None:
-        cat1 = galsim.COSMOSCatalog(sample='25.2', area=roman.collecting_area,
+        cat1 = galsim.COSMOSCatalog(sample='25.2', area=parameters.collecting_area,
                                     exptime=1)
-        cat2 = galsim.COSMOSCatalog(sample='23.5', area=roman.collecting_area,
+        cat2 = galsim.COSMOSCatalog(sample='23.5', area=parameters.collecting_area,
                                     exptime=1)
     else:
         cat1 = galsim.COSMOSCatalog(galaxy_sample_file_name,
-                                    area=roman.collecting_area, exptime=1)
+                                    area=parameters.collecting_area, exptime=1)
         cat2 = cat1
 
     if chromatic:
         # following Roman demo13, all stars currently have the SED of Vega.
         # fluxes are set to have a specific value in the y bandpass.
         vega_sed = galsim.SED('vega.txt', 'nm', 'flambda')
-        y_bandpass = roman.getBandpasses(AB_zeropoint=True)['Y106']
+        y_bandpass = romanisim.models.bandpass.getBandpasses(AB_zeropoint=True)['Y106']
 
     objlist = []
     locs = util.random_points_in_cap(coord, radius, nobj, rng=rng)
@@ -110,7 +115,7 @@ def make_dummy_catalog(coord,
             mu = np.log(mu_x**2 / (mu_x**2 + sigma_x**2)**0.5)
             sigma = (np.log(1 + sigma_x**2 / mu_x**2))**0.5
             gd = galsim.GaussianDeviate(rng, mean=mu, sigma=sigma)
-            flux = np.exp(gd()) / roman.exptime
+            flux = np.exp(gd()) / parameters.exptime
             if chromatic:
                 sed = vega_sed.withFlux(flux, y_bandpass)
                 obj = galsim.DeltaFunction() * sed
@@ -132,7 +137,6 @@ def make_dummy_table_catalog(coord,
                              nobj=1000,
                              bandpasses=None,
                              cosmos=False,
-                             gaia=False,
                              **kwargs
                              ):
     """Make a dummy table catalog.
@@ -154,8 +158,6 @@ def make_dummy_table_catalog(coord,
         List of names of bandpasses in which to generate fluxes.
     cosmos : Bool
         Flag to specify random selection of COSMOS galaxies
-    gaia : Bool
-        Flag to specify usage of stars from the GAIA catalog
 
     Returns
     -------
@@ -163,22 +165,21 @@ def make_dummy_table_catalog(coord,
         Table including fields needed to generate a list of CatalogObject
         entries for rendering.
     """
+    # Create galaxies
     if cosmos:
         t1 = make_cosmos_galaxies(coord, radius=radius, rng=rng,
                                   bandpasses=bandpasses, **kwargs)
+        t1 = t1[:int(nobj * 0.8)]
     else:
         t1 = make_galaxies(coord, radius=radius, rng=rng, n=int(nobj * 0.8),
                            bandpasses=bandpasses)
 
-    if gaia:
-        t2 = make_gaia_stars(coord, radius=radius, rng=rng, **kwargs)
-        cat_table = table.vstack([t1, t2])
-    else:
-        t2 = make_stars(coord, radius=radius, rng=rng, n=int(nobj * 0.1),
-                        bandpasses=bandpasses)
-        t3 = make_stars(coord, radius=radius / 100, rng=rng, n=int(nobj * 0.1),
-                        bandpasses=bandpasses, truncation_radius=radius * 0.3)
-        cat_table = table.vstack([t1, t2, t3])
+    # Create stars
+    t2 = make_stars(coord, radius=radius, rng=rng, n=int(nobj * 0.1),
+                    bandpasses=bandpasses)
+    t3 = make_stars(coord, radius=radius / 100, rng=rng, n=int(nobj * 0.1),
+                    bandpasses=bandpasses, truncation_radius=radius * 0.3)
+    cat_table = table.vstack([t1, t2, t3])
 
     return cat_table
 
@@ -228,7 +229,7 @@ def make_cosmos_galaxies(coord,
     if bandpasses is None:
         cos_filt = ['HSC_r_FLUX_AUTO', 'HSC_z_FLUX_AUTO', 'UVISTA_Y_FLUX_AUTO',
                     'UVISTA_J_FLUX_AUTO', 'UVISTA_H_FLUX_AUTO', 'UVISTA_Ks_FLUX_AUTO']
-        bandpasses = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
+        bandpasses = BANDPASSES
     else:
         for opt_elem in bandpasses:
             if opt_elem == "F062":
@@ -243,6 +244,15 @@ def make_cosmos_galaxies(coord,
                 cos_filt.append('UVISTA_Ks_FLUX_AUTO')
             if opt_elem in ("F158", "F184", "F146"):
                 cos_filt.append('UVISTA_H_FLUX_AUTO')
+            # Mirror the GRISM/PRISM mapping used below when assigning
+            # FLUX_GRISM/FLUX_PRISM, so the cosmos catalog read pulls a
+            # column with non-zero entries and source filtering still leaves
+            # rows behind.
+            if opt_elem == "GRISM":
+                cos_filt.append('UVISTA_H_FLUX_AUTO')
+            if opt_elem == "PRISM":
+                cos_filt.append('UVISTA_J_FLUX_AUTO')
+    cos_filt = list(set(cos_filt))
 
     # Open COSMOS file and pare to required tabs
     if filename:
@@ -273,9 +283,18 @@ def make_cosmos_galaxies(coord,
     cos_cat_all = cos_cat_all[cos_cat_all['ACS_B_WORLD'] > 0]
     cos_cat_all = cos_cat_all[cos_cat_all['ACS_A_WORLD'] > 0]
 
+    # Set negative fluxes to zero
+    for opt_elem in cos_filt:
+        cos_cat_all[opt_elem][cos_cat_all[opt_elem] < 0] = 0
+
+    # Drop sources with no flux in the requested bandpasses
+    good = np.zeros(len(cos_cat_all), dtype='bool')
+    for filt in cos_filt:
+        good |= cos_cat_all[filt] > 0
+    cos_cat_all = cos_cat_all[good]
+
     # Filter for flags
     cos_filt += ["ID", "FLUX_RADIUS", "ACS_A_WORLD", "ACS_B_WORLD"]
-    cos_filt = list(set(cos_filt))
 
     # Trim catalog
     cos_cat = cos_cat_all[cos_filt]
@@ -308,6 +327,11 @@ def make_cosmos_galaxies(coord,
                 ((1 - F184_KS_COEFF) * sim_cat['UVISTA_H_FLUX_AUTO'])
         elif opt_elem == "F213":
             sim_cat['FLUX_F213'] = sim_cat['UVISTA_Ks_FLUX_AUTO']
+        # Special cases for the GRISM and PRISM to avoid test failures
+        elif opt_elem == "GRISM":
+            sim_cat['FLUX_GRISM'] = sim_cat['UVISTA_H_FLUX_AUTO']
+        elif opt_elem == "PRISM":
+            sim_cat['FLUX_PRISM'] = sim_cat['UVISTA_J_FLUX_AUTO']
         else:
             log.warning(f'Unknown filter {opt_elem} skipped in object catalog creation.')
 
@@ -341,13 +365,17 @@ def make_cosmos_galaxies(coord,
     source_pert = np.ones(len(sim_ids))
     source_pert += ((0.2) * rng_numpy.normal(size=len(sim_ids)))
 
-    # Convert fluxes to Jankskys and normalize for zero-point
+    # Sort bandpasses to preserve order
+    bandpasses = list(bandpasses)
+    bandpasses.sort()
+
+    # Convert fluxes to maggies by converting to Jankskys and normalizing for zero-point
     for bandpass in bandpasses:
         # Perturb sources fluxes by 5% per bandwidth
         band_source_pert = ((0.05) * rng_numpy.normal(size=len(sim_ids)))
 
-        # Convert fluxes to Jankskys, normalize for zero-point, and apply perturbations
-        out[bandpass] = sim_cat[f'FLUX_{bandpass}'] * (1 + source_pert + band_source_pert) / (3631 * 10**6)
+        # Convert fluxes to maggies by converting to Jankskys, normalizing for zero-point, and applying perturbations
+        out[bandpass] = sim_cat[f'FLUX_{bandpass}'].value * (1 + source_pert + band_source_pert) / (3631 * 10**6)
 
     # Return output table
     return out
@@ -396,8 +424,8 @@ def make_galaxies(coord,
         Table for use with table_to_catalog to generate catalog for simulation.
     """
     if bandpasses is None:
-        bandpasses = roman.getBandpasses().keys()
-        bandpasses = [romanisim.bandpass.galsim2roman_bandpass[b]
+        bandpasses = romanisim.models.bandpass.getBandpasses().keys()
+        bandpasses = [romanisim.models.bandpass.galsim2roman_bandpass[b]
                       for b in bandpasses]
     if rng is None:
         rng = galsim.UniformDeviate(seed)
@@ -453,7 +481,7 @@ def make_gaia_stars(coord,
                     bandpasses=None,
                     **kwargs
                     ):
-    """Make a catalog of stars from the GAIA catalog.
+    """Make a catalog of stars from the Gaia catalog.
 
     Parameters
     ----------
@@ -473,12 +501,13 @@ def make_gaia_stars(coord,
     """
 
     if bandpasses is None:
-        bandpasses = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
+        bandpasses = BANDPASSES
 
     if date is None:
         date = astropy.time.Time('2026-01-01T00:00:00')
 
-    # Perform GAIA search
+    from astroquery.gaia import Gaia
+    # Perform Gaia search
     q = f'select * from gaiadr3.gaia_source where distance({coord.ra.value}, {coord.dec.value}, ra, dec) < {radius}'
     job = Gaia.launch_job_async(q)
     r = job.get_results()
@@ -487,6 +516,44 @@ def make_gaia_stars(coord,
     star_cat = rsim_gaia.gaia2romanisimcat(r, date, fluxfields=bandpasses)
 
     return star_cat
+
+
+def read_one_healpix(filename,
+                     date=None,
+                     bandpasses=None,
+                     **kwargs
+                     ):
+    """Make a catalog of stars from a Gaia catalog files, sorted by Healpix.
+
+    The files are assumed to be in FITS format.
+    Healpix parameters:
+    128 sides
+    nested order
+    Galactic frame
+
+    Parameters
+    ----------
+    filename: string
+        Path to healpix file
+    date : astropy.time.Time
+        Optional argument to provide a date and time for stellar search
+    bandpasses : list[str]
+        List of names of bandpasses for which to generate fluxes.
+
+    Returns
+    -------
+    catalog : astropy.Table
+        Table for use with table_to_catalog to generate catalog for simulation.
+    """
+
+    # Open healpix file
+    cat_table = table.Table.read(filename)
+
+    # Check for RSIM Gaia catalog
+    if 'phot_g_mean_mag' in cat_table.colnames:
+        return rsim_gaia.gaia2romanisimcat(cat_table, date, fluxfields=bandpasses, **kwargs)
+    else:
+        return cat_table
 
 
 def make_stars(coord,
@@ -538,8 +605,8 @@ def make_stars(coord,
         Table for use with table_to_catalog to generate catalog for simulation.
     """
     if bandpasses is None:
-        bandpasses = roman.getBandpasses().keys()
-        bandpasses = [romanisim.bandpass.galsim2roman_bandpass[b]
+        bandpasses = romanisim.models.bandpass.getBandpasses().keys()
+        bandpasses = [romanisim.models.bandpass.galsim2roman_bandpass[b]
                       for b in bandpasses]
     if rng is None:
         rng = galsim.UniformDeviate(seed)
@@ -636,10 +703,16 @@ def image_table_to_catalog(table, bandpasses):
         raise ValueError(
             'catalog file name must be present in table metadata.')
     rgc = galsim.RealGalaxyCatalog(table.meta['real_galaxy_catalog_filename'])
+
+    # Convert coordinates to radians to be loaded into GalSim objects.
+
+    allpos = coordinates.SkyCoord(table['ra'] * u.deg, table['dec'] * u.deg,
+                                  frame='icrs')
+    all_ra_radians = allpos.ra.to(u.rad).value * galsim.radians
+    all_dec_radians = allpos.dec.to(u.rad).value * galsim.radians
+
     for i in range(len(table)):
-        pos = coordinates.SkyCoord(table['ra'][i] * u.deg, table['dec'][i] * u.deg,
-                                   frame='icrs')
-        pos = util.celestialcoord(pos)
+        pos = galsim.CelestialCoord(all_ra_radians[i], all_dec_radians[i])
         fluxes = {bp: table[bp][i] for bp in bandpasses}
         obj = galsim.RealGalaxy(rgc, id=table['ident'][i])
         obj = obj.shear(
@@ -751,10 +824,16 @@ def table_to_catalog(table, bandpasses):
         return image_table_to_catalog(table, bandpasses)
 
     out = list()
+
+    # Convert coordinates to radians to be loaded into GalSim objects.
+
+    allpos = coordinates.SkyCoord(table['ra'] * u.deg, table['dec'] * u.deg,
+                                  frame='icrs')
+    all_ra_radians = allpos.ra.to(u.rad).value * galsim.radians
+    all_dec_radians = allpos.dec.to(u.rad).value * galsim.radians
+
     for i in range(len(table)):
-        pos = coordinates.SkyCoord(table['ra'][i] * u.deg, table['dec'][i] * u.deg,
-                                   frame='icrs')
-        pos = util.celestialcoord(pos)
+        pos = galsim.CelestialCoord(all_ra_radians[i], all_dec_radians[i])
         fluxes = {bp: table[bp][i] for bp in bandpasses}
         if table['type'][i] == 'PSF':
             obj = galsim.DeltaFunction()
@@ -769,22 +848,104 @@ def table_to_catalog(table, bandpasses):
     return out
 
 
-def read_catalog(filename, bandpasses):
-    """Read a catalog into a list of CatalogObjects.
+def read_catalog(filename,
+                 coord,
+                 date=None,
+                 bandpasses=None,
+                 radius=parameters.WFS_FOV,
+                 **kwargs):
+    """Read a catalog (or directory of catalogs) into a list of CatalogObjects.
 
     Catalog must be readable by astropy.table.Table.read(...) and contain
     columns enumerated in the docstring for table_to_catalog(...).
 
     Parameters
     ----------
-    filename : str
-        filename of catalog to read
+    filename : str or None
+        Filename of catalog, or directory containing healpix catalogs, or None.
+        If None, will query Gaia catalog at the provided `coord`.
+    coord : astropy.coordinates.SkyCoord
+        Location around which to generate sources. Not used if the provided
+        `filename` is a single catalog file.
+    date : astropy.time.Time
+        Optional argument to provide a date and time for catalog query.
+        Not used if the provided `filename` is a single catalog file.
     bandpasses : list[str]
-        bandpasses for which fluxes are tabulated in the catalog
+        Bandpasses for which fluxes are tabulated in the catalog
+    radius: float
+        Radius over which to search healpix for source file indicies
+
+    Any additional keyword arguments provided will be passed to
+    `make_gaia_stars` if the `filename` argument is None or
+    `read_one_healpix` if `filename` is a directory of healpix catalogs.
 
     Returns
     -------
-    list[CatalogObject]
-        list of catalog objects in filename
+    cat : astropy.Table
+        Table for use with table_to_catalog to generate catalog for simulation.
     """
-    return table_to_catalog(table.Table.read(filename), bandpasses)
+    # Set defaults if needed
+    if bandpasses is None:
+        bandpasses = BANDPASSES
+
+    if date is None:
+        date = astropy.time.Time('2026-01-01T00:00:00')
+
+    # Generate star catalogs
+    if filename is None:
+        # Call Gaia website for information
+        cat = make_gaia_stars(coord, radius=radius, date=date, **kwargs)
+    elif os.path.isdir(filename):
+        # Healpix catalogs within a directory
+        metafilename = os.path.join(filename, 'meta.yaml')
+        if os.path.exists(metafilename):
+            meta = yaml.safe_load(open(metafilename, 'rb'))
+        else:
+            meta = dict()
+        nside = meta.get('nside', 128)
+        ext = meta.get('extension', 'fits')
+
+        # Set parameters of Healpix
+        hp = astropy_healpix.HEALPix(
+            nside=nside, order='nested', frame=coordinates.Galactic())
+
+        # Find Healpix
+        hp_cone = hp.cone_search_skycoord(util.skycoord(coord), radius=radius * u.deg)
+
+        # Create catalog from one or more of the input healpix files.
+        # If an expected file is missing, skip it.  If none of the
+        # expected files are present, raise a FileNotFoundError.
+
+        cat = None
+        for i, healpix_index in enumerate(hp_cone):
+            log.info(f'Loading healpix catalog file {i + 1} of {len(hp_cone)}')
+            hp_filename = filename + f"/cat-{healpix_index}.{ext}"
+            if os.path.isfile(hp_filename):
+                hp_table = read_one_healpix(hp_filename, date, bandpasses, **kwargs)
+                if cat is None:
+                    cat = hp_table
+                else:
+                    cat = table.vstack([cat, hp_table])
+            else:
+                log.warning(f'Healpix index {healpix_index} is within the '
+                            f'cone search but its catalog file was not found.')
+        if cat is None:
+            raise FileNotFoundError("No files found in healpix cone search!")
+    else:
+        # Catalog file
+        cat = table.Table.read(filename)
+
+    # Remove bad entries
+    bandpass = [f for f in cat.dtype.names if f in BANDPASSES]
+    bad = np.zeros(len(cat), dtype='bool')
+    for b in bandpass:
+        bad |= ~np.isfinite(cat[b])
+        if hasattr(cat[b], 'mask'):
+            bad |= cat[b].mask
+    cat = cat[~bad]
+    nbad = np.sum(bad)
+    if nbad > 0:
+        log.info(f'Removing {nbad} catalog entries with non-finite or '
+                 'masked fluxes.')
+
+    return cat

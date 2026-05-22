@@ -8,9 +8,11 @@ from astropy.time import Time
 import galsim
 import gwcs as gwcsmod
 
-from romanisim import parameters, wcs, bandpass
 from romanisim.velocity_aberration import compute_va_effects
 from scipy import integrate
+from collections.abc import Mapping
+
+from romanisim.models import wcs, parameters, bandpass
 
 __all__ = ["skycoord",
            "celestialcoord",
@@ -186,7 +188,7 @@ def random_points_at_radii(coord, radii, rng=None):
     return c1
 
 
-def add_more_metadata(metadata):
+def add_more_metadata(metadata, usecrds=False):
     """Fill out the metadata dictionary, modifying it in place.
 
     Parameters
@@ -204,26 +206,51 @@ def add_more_metadata(metadata):
     if 'guide_star' not in metadata.keys():
         metadata['guide_star'] = {}
     manum = metadata['exposure']['ma_table_number']
-    read_pattern = metadata['exposure'].get(
-        'read_pattern',
-        parameters.read_pattern[metadata['exposure']['ma_table_number']])
-    metadata['exposure']['read_pattern'] = read_pattern
-    openshuttertime = parameters.read_time * read_pattern[-1][-1]
+    metadata['exposure']['ma_table_id'] = f'SCI{manum:04d}'
+
+    matab = None
+    if getattr(parameters, 'ma_table_reference', None):
+        matab = parameters.ma_table_reference
+
+    if matab is None and usecrds:
+        raise ValueError('ma table reference file is not loaded!')
+
+    if usecrds:
+        tmatab = matab['roman']['science_tables'][f'SCI{manum:04}']
+        metadata['exposure']['frame_time'] = tmatab['frame_time']
+
+        # nrsultant in the metadata is defined from set_metadata in ris_make_utils.py
+        nresultants = metadata['exposure']['nresultants']
+        read_pattern = metadata['exposure'].get(
+            'read_pattern',
+            tmatab['science_read_pattern'][nresultants-1])
+        openshuttertime = metadata['exposure']['frame_time'] * read_pattern[-1][-1]
+
+        metadata['exposure']['exposure_time'] = (
+            tmatab['accumulated_exposure_time'][nresultants - 1])
+        metadata['exposure']['effective_exposure_time'] = (
+            tmatab['effective_exposure_time'][nresultants - 1])
+    else:
+        metadata['exposure']['frame_time'] = parameters.read_time
+
+        read_pattern = metadata['exposure'].get(
+            'read_pattern',
+            parameters.read_pattern[metadata['exposure']['ma_table_number']])
+        openshuttertime = parameters.read_time * read_pattern[-1][-1]
+
+        metadata['exposure']['exposure_time'] = round(openshuttertime, 4)
+        effexptime = parameters.read_time * (np.mean(read_pattern[-1]))        
+        metadata['exposure']['effective_exposure_time'] = round(effexptime, 4)
+
     offsets = dict(start=0 * u.s, mid=openshuttertime * u.s / 2,
-                   end=openshuttertime * u.s)
+                end=openshuttertime * u.s)
     starttime = metadata['exposure']['start_time']
     if not isinstance(starttime, Time):
         starttime = Time(starttime, format='isot')
     for prefix, offset in offsets.items():
         metadata['exposure'][f'{prefix}_time'] = Time((
             starttime + offset).isot)
-    metadata['exposure']['nresultants'] = len(read_pattern)
-    metadata['exposure']['frame_time'] = parameters.read_time
-    metadata['exposure']['exposure_time'] = openshuttertime
-    metadata['exposure']['ma_table_id'] = f'sci{manum:04d}'
-    effexptime = parameters.read_time * (
-        np.mean(read_pattern[-1]) - np.mean(read_pattern[0]))
-    metadata['exposure']['effective_exposure_time'] = effexptime
+
     if 'window_xstart' in metadata['guide_star']:
         metadata['guide_star']['window_xstop'] = (
             metadata['guide_star']['window_xstart'] + 16)
@@ -232,6 +259,7 @@ def add_more_metadata(metadata):
     if 'visit' not in metadata.keys():
         metadata['visit'] = dict()
     metadata['visit']['status'] = 'SUCCESSFUL'
+
 
 
 def update_pointing_and_wcsinfo_metadata(metadata, gwcs):
@@ -260,7 +288,7 @@ def update_pointing_and_wcsinfo_metadata(metadata, gwcs):
     metadata['wcsinfo']['aperture_name'] = (
         metadata['instrument']['detector'] + '_FULL')
     distortion = gwcs.get_transform('detector', 'v2v3')
-    center = (galsim.roman.n_pix / 2 - 0.5, galsim.roman.n_pix / 2 - 0.5)
+    center = (parameters.n_pix / 2 - 0.5, parameters.n_pix / 2 - 0.5)
     v2v3 = distortion(*center)
     radec = gwcs(*center)
     t2sky = gwcs.get_transform('v2v3', 'world')
@@ -501,12 +529,11 @@ def update_photom_keywords(im, gain=None):
     ----------
     im : roman_datamodels.ImageModel
         Image whose metadata should be updated with photometry keywords
-    gain : float, Quantity, array
-        Gain image to use
+    gain : float or np.ndarray, optional
+        Gain in electron/DN (scalar or image)
     """
     gain = (np.median(gain)
             if gain is not None else parameters.reference_data['gain'])
-    gain = gain.value if isinstance(gain, u.Quantity) else gain
     if 'wcs' in im['meta']:
         wcs = im['meta']['wcs']
         cenpix = (im.data.shape[0] // 2, im.data.shape[1] // 2)
@@ -551,7 +578,7 @@ def merge_dicts(a, b):
         a, mutated to contain keys from b.
     """
     for key in b:
-        if key in a and isinstance(a[key], dict) and isinstance(b[key], dict):
+        if key in a and isinstance(a[key], Mapping) and isinstance(b[key], Mapping):
             merge_dicts(a[key], b[key])
         else:
             a[key] = b[key]

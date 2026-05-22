@@ -4,26 +4,24 @@ Based on galsim's implementation of Roman image simulation.  Uses galsim Roman m
 for most of the real work.
 """
 
+import copy
 import math
 import numpy as np
 import galsim
 
 from . import log
 import romanisim.catalog
-import romanisim.wcs
+import romanisim.models.wcs
 import romanisim.l1
-import romanisim.bandpass
+import romanisim.models.bandpass
 import romanisim.psf
 import romanisim.image
 import romanisim.persistence
-import romanisim.parameters
+import romanisim.models.parameters
+from roman_datamodels.datamodels import MosaicModel
 import romanisim.util
-import roman_datamodels.datamodels as rdm
-from roman_datamodels.stnode import WfiMosaic
 import astropy.units as u
-import roman_datamodels.maker_utils as maker_utils
 import astropy
-from galsim import roman
 from astropy import table
 import astropy.coordinates
 
@@ -63,17 +61,17 @@ def add_objects_to_l3(l3_mos, source_cat, exptimes, xpos, ypos, psf,
 
     Returns
     -------
-    Information from romanisim.image.add_objects_to_image.  Note
-    that l3_mos is updated in place.
+    outinfo: Information from romanisim.image.add_objects_to_image.  Note
+        that l3_mos is updated in place.
     """
     # Obtain optical element
     if filter_name is None:
-        filter_name = l3_mos.meta.basic.optical_element
+        filter_name = l3_mos.meta.instrument.optical_element
 
     # Create Image canvas to add objects to
-    if isinstance(l3_mos, (rdm.MosaicModel, WfiMosaic)):
+    if isinstance(l3_mos, (MosaicModel, MosaicModel._node_type)):
         sourcecountsall = galsim.ImageF(
-            l3_mos.data, wcs=romanisim.wcs.GWCS(l3_mos.meta.wcs),
+            np.array(l3_mos.data), wcs=romanisim.models.wcs.GWCS(l3_mos.meta.wcs),
             xmin=0, ymin=0)
     else:
         sourcecountsall = l3_mos
@@ -87,14 +85,14 @@ def add_objects_to_l3(l3_mos, source_cat, exptimes, xpos, ypos, psf,
         rng=rng, seed=seed, add_noise=True)
 
     # Save array with added sources
-    if isinstance(l3_mos, (rdm.MosaicModel, WfiMosaic)):
+    if isinstance(l3_mos, (MosaicModel, MosaicModel._node_type)):
         l3_mos.data = sourcecountsall.array
 
     return outinfo
 
 
 def inject_sources_into_l3(model, cat, x=None, y=None, psf=None, rng=None,
-                           stpsf=True, exptimes=None, seed=None):
+                           psftype='galsim', exptimes=None, seed=None, return_info=False):
     """Inject sources into an L3 image.
 
     This routine allows sources to be injected onto an existing L3 image.
@@ -129,62 +127,73 @@ def inject_sources_into_l3(model, cat, x=None, y=None, psf=None, rng=None,
         galsim random number generator to use
     seed : int
         Seed to use for rng
-    stpsf: bool
-        if True, use Stpsf to model the PSF
+    psftype : One of ['epsf', 'galsim', 'stpsf']
+        How to determine the PSF.
+    return_info: bool
+        if True, return information from romanisim.image.add_objects_to_image.
 
     Returns
     -------
-    outinfo : np.ndarray with information about added sources
+    res_model : roman_datamodels.datamodels.WfiMosaic
+        model with additional sources
+    res : bool (optional)
+        information from romanisim.image.add_objects_to_image.
     """
+
+    res_model = copy.deepcopy(model)
+
     if seed is None:
         seed = 125
     if rng is None:
         rng = galsim.UniformDeviate(seed)
 
     if x is None or y is None:
-        x, y = model.meta.wcs.numerical_inverse(cat['ra'].value, cat['dec'].value,
+        x, y = res_model.meta.wcs.numerical_inverse(cat['ra'].value, cat['dec'].value,
                                                 with_bounding_box=False)
 
-    filter_name = model.meta.basic.optical_element
+    filter_name = res_model.meta.instrument.optical_element
     cat = romanisim.catalog.table_to_catalog(cat, [filter_name])
 
-    wcs = romanisim.wcs.GWCS(model.meta.wcs)
-    pixscalefrac = get_pixscalefrac(wcs, model.data.shape)
+    wcs = romanisim.models.wcs.GWCS(res_model.meta.wcs)
+    pixscalefrac = get_pixscalefrac(wcs, res_model.data.shape)
     if psf is None:
         if (pixscalefrac > 1) or (pixscalefrac < 0):
             raise ValueError('weird pixscale!')
-        psf = l3_psf(filter_name, pixscalefrac, stpsf=True, chromatic=False)
-    sca = romanisim.parameters.default_sca
-    maggytoes = romanisim.bandpass.get_abflux(filter_name, sca)
-    etomjysr = romanisim.bandpass.etomjysr(filter_name, sca) / pixscalefrac ** 2
+        psf = l3_psf(filter_name, pixscalefrac, psftype=psftype, chromatic=False, date=model.meta.coadd_info.time_mean)
+    sca = romanisim.models.parameters.default_sca
+    maggytoes = romanisim.models.bandpass.get_abflux(filter_name, sca)
+    etomjysr = romanisim.models.bandpass.etomjysr(filter_name, sca) / pixscalefrac ** 2
 
     Ct = []
     for idx, (x0, y0) in enumerate(zip(x, y)):
         # Set scaling factor for injected sources
         # Flux / sigma_p^2
         xidx, yidx = int(np.round(x0)), int(np.round(y0))
-        if model.var_poisson[yidx, xidx] != 0:
+        if res_model.var_poisson[yidx, xidx] != 0:
             Ct.append(math.fabs(
-                model.data[yidx, xidx] /
-                model.var_poisson[yidx, xidx]))
+                res_model.data[yidx, xidx] /
+                res_model.var_poisson[yidx, xidx]))
         else:
             Ct.append(1.0)
     Ct = np.array(Ct)
     # etomjysr = 1/C; C converts fluxes to electrons
     exptimes = Ct * etomjysr
 
-    Ct_all = (model.data /
-              (model.var_poisson + (model.var_poisson == 0)))
+    Ct_all = (res_model.data /
+              (res_model.var_poisson + (res_model.var_poisson == 0)))
 
     # compute the total number of counts we got from the source
     res = add_objects_to_l3(
-        model, cat, exptimes, x, y, psf, etomjysr=etomjysr,
+        res_model, cat, exptimes, x, y, psf, etomjysr=etomjysr,
         maggytoes=maggytoes, filter_name=filter_name, bandpass=None,
         rng=rng)
 
-    model.var_poisson = (model.data / Ct_all)
+    res_model.var_poisson = (res_model.data / Ct_all)
 
-    return res
+    if return_info:
+        return res_model, res
+    else:
+        return res_model
 
 
 
@@ -195,7 +204,7 @@ def generate_exptime_array(cat, meta):
     """
 
     # Get wcs for this metadata
-    twcs = romanisim.wcs.GWCS(romanisim.wcs.get_mosaic_wcs(meta))
+    twcs = romanisim.models.wcs.GWCS(romanisim.models.wcs.get_mosaic_wcs(meta))
 
     # Obtain sky positions for objects
     coords = np.array([[o.sky_pos.ra.rad, o.sky_pos.dec.rad]
@@ -262,24 +271,24 @@ def l3_psf(bandpass, scale=0, chromatic=False, **kw):
 
     if scale < 0 or scale > 1:
         raise ValueError('scale must be between 0 and 1')
-    convscale = romanisim.parameters.pixel_scale * np.sqrt(
+    convscale = romanisim.models.parameters.pixel_scale * np.sqrt(
         1 - scale**2)
     if scale == 1:
         extra_convolution = None
     else:
         extra_convolution = galsim.Pixel(
-            convscale * romanisim.parameters.pixel_scale)
+            convscale * romanisim.models.parameters.pixel_scale)
     psf = romanisim.psf.make_psf(filter_name=bandpass,
-                                 sca=romanisim.parameters.default_sca,
+                                 sca=romanisim.models.parameters.default_sca,
                                  extra_convolution=extra_convolution,
                                  chromatic=chromatic, **kw)
     return psf
 
 
 def simulate(shape, wcs, efftimes, filter_name, catalog, nexposures=1,
-             metadata={}, 
+             metadata={},
              effreadnoise=None, sky=None, psf=None,
-             bandpass=None, seed=None, rng=None, stpsf=True,
+             bandpass=None, seed=None, rng=None, psftype='galsim',
              **kwargs):
     """Simulate a sequence of observations on a field in different bandpasses.
 
@@ -307,22 +316,22 @@ def simulate(shape, wcs, efftimes, filter_name, catalog, nexposures=1,
     sky : float or array_like
         Image or constant with sky and other backgrounds (MJy / sr).  If None, then
         sky will be generated from galsim's getSkyLevel for Roman for the
-        date provided in metadata[basic][time_mean_mjd].
+        date provided in metadata['coadd_info']['time_mean'].
     psf : galsim.Profile or None
         PSF for image
     bandpass : galsim.Bandpass
         Bandpass in which mosaic is being rendered. This is used only in cases
         where chromatic profiles & PSFs are being used.
-    stpsf : bool
-        Use stpsf to compute PSF
     rng : galsim.BaseDeviate
         random number generator to use
+    psftype : One of ['epsf', 'galsim', 'stpsf']
+        How to determine the PSF.
     seed : int
         seed to use for random number generator
 
     Returns
     -------
-    mosaic_mdl : roman_datamodels model
+    mosaic_node : roman_datamodels WfiMosaic node
         simulated mosaic
     extras : dict
         Dictionary of additionally valuable quantities.  Includes at least
@@ -331,64 +340,67 @@ def simulate(shape, wcs, efftimes, filter_name, catalog, nexposures=1,
     """
 
     # Create metadata object
-    meta = maker_utils.mk_mosaic_meta()  # all dummy values
+    mosaic_node = MosaicModel._node_type.create_fake_data()
+    meta = mosaic_node.meta
 
     # add romanisim defaults
-    for key in romanisim.parameters.default_mosaic_parameters_dictionary.keys():
+    for key in romanisim.models.parameters.default_mosaic_parameters_dictionary.keys():
         meta[key].update(
-            romanisim.parameters.default_mosaic_parameters_dictionary[key])
+            romanisim.models.parameters.default_mosaic_parameters_dictionary[key])
 
-    # add user-specified metadta
+    # add user-specified metadata
     romanisim.util.merge_dicts(meta, metadata)
 
     add_more_metadata(meta, efftimes, filter_name, wcs, shape, nexposures)
     meta['wcs'] = wcs
-    meta['basic']['optical_element'] = filter_name
+    meta['instrument']['optical_element'] = filter_name
 
     log.info('Simulating filter {0}...'.format(filter_name))
 
     # Get filter and bandpass
-    galsim_filter_name = romanisim.bandpass.roman2galsim_bandpass[filter_name]
+    galsim_filter_name = romanisim.models.bandpass.roman2galsim_bandpass[filter_name]
     if bandpass is None:
-        bandpass = roman.getBandpasses(AB_zeropoint=True)[galsim_filter_name]
+        bandpass = romanisim.models.bandpass.getBandpasses(AB_zeropoint=True)[galsim_filter_name]
 
     # Create initial galsim image; galsim wants x/y instead of normal shape
-    image = galsim.ImageF(shape[1], shape[0], wcs=romanisim.wcs.GWCS(wcs),
+    image = galsim.ImageF(shape[1], shape[0], wcs=romanisim.models.wcs.GWCS(wcs),
                           xmin=0, ymin=0)
 
     # Using the default SCA
-    sca = romanisim.parameters.default_sca
+    sca = romanisim.models.parameters.default_sca
     pixscalefrac = get_pixscalefrac(image.wcs, shape)
-    etomjysr = romanisim.bandpass.etomjysr(filter_name, sca) / pixscalefrac ** 2
+    etomjysr = romanisim.models.bandpass.etomjysr(filter_name, sca) / pixscalefrac ** 2
     # this should really be per-pixel to deal with small distortions,
     # but these are 0.01% 1 degree away in a tangent plane projection,
     # and we ignore them.
 
     # Create sky for this mosaic, if not provided (in cps)
     if sky is None:
-        date = meta['basic']['time_mean_mjd']
+        date = meta['coadd_info']['time_mean']
         if not isinstance(date, astropy.time.Time):
             date = astropy.time.Time(date, format='mjd')
 
         mos_cent_pos = image.wcs.toWorld(image.true_center)
-        sky_level = roman.getSkyLevel(bandpass, world_pos=mos_cent_pos, exptime=1)
-        sky_level *= (1.0 + roman.stray_light_fraction)
+        sky_level = romanisim.models.backgrounds.getSkyLevel(bandpass, world_pos=mos_cent_pos,
+                                      exptime=1, date=date.to_datetime())
+        sky_level *= (1.0 + romanisim.models.parameters.stray_light_fraction)
         sky = image * 0
         image.wcs.makeSkyImage(sky, sky_level)
-        sky += roman.thermal_backgrounds[galsim_filter_name] * pixscalefrac ** 2
+        sky += romanisim.models.backgrounds.thermal_backgrounds[galsim_filter_name] * pixscalefrac ** 2
     else:
         sky = sky * pixscalefrac ** 2 / etomjysr
         # convert to electrons / s / output pixel
 
     # Flux in AB mags to electrons
-    maggytoes = romanisim.bandpass.get_abflux(filter_name, sca)
+    maggytoes = romanisim.models.bandpass.get_abflux(filter_name, sca)
 
     # Set effective read noise
     if effreadnoise is None:
-        readnoise = np.median(romanisim.parameters.reference_data['readnoise'])
-        gain = np.median(romanisim.parameters.reference_data['gain'])
+        readnoise = np.median(romanisim.models.parameters.reference_data['readnoise'])
+        # read noise in DN
+        gain = np.median(romanisim.models.parameters.reference_data['gain'])
         effreadnoise = (
-            np.sqrt(2) * readnoise * gain)
+            np.sqrt(2) * readnoise * gain)  # electron, difference of two reads
         # sqrt(2) from subtracting one read from another
         effreadnoise /= (np.median(efftimes * pixscalefrac ** 2) / nexposures)
         # divided by the typical exposure length
@@ -400,10 +412,10 @@ def simulate(shape, wcs, efftimes, filter_name, catalog, nexposures=1,
         # note that we are ignoring all of the individual reads, which also
         # contribute to reducing the effective read noise.  Pass --effreadnoise
         # if you want to do better than this!
-        effreadnoise = effreadnoise.to(u.electron).value * etomjysr
+        effreadnoise = effreadnoise * etomjysr * pixscalefrac ** 2  # electron -> MJy/sr
+        # factor of pixfrac ** 2 because etomjysr is per L3 pixel, but
+        # this effreadnoise calculation is per native pixel
         # converting to MJy/sr units
-    else:
-        effreadnoise = 0
 
     chromatic = False
     if (len(catalog) > 0 and not isinstance(catalog, astropy.table.Table)
@@ -413,12 +425,12 @@ def simulate(shape, wcs, efftimes, filter_name, catalog, nexposures=1,
     if psf is None:
         if (pixscalefrac > 1) or (pixscalefrac < 0):
             raise ValueError('weird pixscale!')
-        psf = l3_psf(filter_name, pixscalefrac, stpsf=stpsf,
-                     chromatic=chromatic)
+        psf = l3_psf(filter_name, pixscalefrac, psftype=psftype,
+                     chromatic=chromatic, date=meta['coadd_info']['time_mean'])
 
     # Simulate mosaic cps
     mosaic, extras = simulate_cps(
-        image, filter_name, efftimes, objlist=catalog, psf=psf, 
+        image, filter_name, efftimes, objlist=catalog, psf=psf,
         sky=sky,
         effreadnoise=effreadnoise, bandpass=bandpass,
         rng=rng, seed=seed,
@@ -429,12 +441,15 @@ def simulate(shape, wcs, efftimes, filter_name, catalog, nexposures=1,
     var_poisson = extras.pop('var_poisson')
     var_rnoise = extras.pop('var_rnoise')
     context = np.ones((1,) + mosaic.array.shape, dtype=np.uint32)
-    mosaic_mdl = make_l3(mosaic, meta, efftimes, var_poisson=var_poisson,
-                         var_rnoise=var_rnoise, context=context)
+    if not isinstance(var_rnoise, np.ndarray):
+        var_rnoise = np.full(mosaic.array.shape, var_rnoise, np.float32)
+    if not isinstance(var_poisson, np.ndarray):
+        var_poisson = np.full(mosaic.array.shape, var_poisson, np.float32)
+    mosaic_node = make_l3(mosaic_node, mosaic, efftimes, var_poisson=var_poisson,
+                          var_rnoise=var_rnoise, context=context)
 
     log.info('Simulation complete.')
-    # return mosaic, extras
-    return mosaic_mdl, extras
+    return mosaic_node, extras
 
 
 def get_pixscalefrac(wcs, shape):
@@ -455,7 +470,7 @@ def get_pixscalefrac(wcs, shape):
     pos1 = wcs.toWorld(galsim.PositionD(cenpix[0], cenpix[1]))
     pos2 = wcs.toWorld(galsim.PositionD(cenpix[0], (cenpix[1] + 1)))
     pixscale = pos1.distanceTo(pos2).deg * 60 * 60  # arcsec
-    pixscale /= romanisim.parameters.pixel_scale
+    pixscale /= romanisim.models.parameters.pixel_scale
     if (pixscale > 1 and pixscale < 1.05):
         pixscale = 1
         log.info('Setting pixscale to match default.')
@@ -466,7 +481,7 @@ def simulate_cps(image, filter_name, efftimes, objlist=None, psf=None,
                  xpos=None, ypos=None, coord=None, sky=0, bandpass=None,
                  effreadnoise=None, maggytoes=None, etomjysr=None,
                  rng=None, seed=None, ignore_distant_sources=10,):
-    """Simulate average MegaJankies per steradian in a single SCA.
+    """Simulate average MJy/sr in a single SCA.
 
     Parameters
     ----------
@@ -492,10 +507,10 @@ def simulate_cps(image, filter_name, efftimes, objlist=None, psf=None,
     effreadnoise : float
         Effective read noise for mosaic (MJy / sr)
     maggytoes: float
-        Factor to convert electrons to MJy / sr; one maggy makes
+        Factor to convert e/s to MJy / sr; one maggy makes
         this many e/s.
     etomjysr : float
-        Factor to convert electron to MJy/sr;  one e/s/pix corresponds
+        Factor to convert e/s to MJy / sr; one e/s/coadd pix corresponds
         to this MJy/sr.
     rng : galsim.BaseDeviate
         random number generator
@@ -512,7 +527,7 @@ def simulate_cps(image, filter_name, efftimes, objlist=None, psf=None,
         catalog of simulated objects in image, noise, and misc. debug
     """
     # Using the default SCA
-    sca = romanisim.parameters.default_sca
+    sca = romanisim.models.parameters.default_sca
 
     if rng is None and seed is None:
         seed = 144
@@ -522,10 +537,10 @@ def simulate_cps(image, filter_name, efftimes, objlist=None, psf=None,
         rng = galsim.UniformDeviate(seed)
 
     if etomjysr is None:
-        etomjysr = romanisim.bandpass.etomjysr(filter_name, sca)
+        etomjysr = romanisim.models.bandpass.etomjysr(filter_name, sca)
 
     if maggytoes is None:
-        maggytoes = romanisim.bandpass.get_abflux(filter_name, sca)
+        maggytoes = romanisim.models.bandpass.get_abflux(filter_name, sca)
 
     # Dictionary to hold simulation artifacts
     extras = {}
@@ -631,13 +646,15 @@ def simulate_cps(image, filter_name, efftimes, objlist=None, psf=None,
     return image, extras
 
 
-def make_l3(image, metadata, efftimes, var_poisson=None,
+def make_l3(mosaic_node, image, efftimes, var_poisson=None,
             var_flat=None, var_rnoise=None, context=None):
     """
-    Create and populate MosaicModel of image and noises.
+    Populate a MosaicModel with image and noises.
 
     Parameters
     ----------
+    mosaic_node : MosaicModel
+        MosaicModel to update
     image : galsim.Image
         Image containing mosaic data (MJy / sr)
     metadata : dict
@@ -669,27 +686,22 @@ def make_l3(image, metadata, efftimes, var_poisson=None,
     else:
         efftimes_arr = efftimes * np.ones(mosaic.shape, dtype=np.float32)
 
-    # Set mosaic to be a mosaic node
-    mosaic_node = maker_utils.mk_level3_mosaic(
-        shape=mosaic.shape, meta=metadata)
-    mosaic_node.meta.wcs = metadata['wcs']
-
     # Set data
     mosaic_node.data = mosaic
 
-    var_poisson = 0 if var_poisson is None else var_poisson
-    var_rnoise = 0 if var_rnoise is None else var_rnoise
-    var_flat = 0 if var_flat is None else var_flat
+    empty_var = np.zeros(mosaic.shape, dtype=np.float32)
+    var_poisson = empty_var if var_poisson is None else var_poisson
+    var_rnoise = empty_var if var_rnoise is None else var_rnoise
+    var_flat = empty_var if var_flat is None else var_flat
     context = (np.ones((1,) + mosaic.shape, dtype=np.uint32)
                if context is None else context)
-    
-    mosaic_node.var_poisson[...] = var_poisson
-    mosaic_node.var_rnoise[...] = var_rnoise
-    mosaic_node.var_flat[...] = var_flat
-    mosaic_node.err[...] = np.sqrt(
-        var_poisson + var_rnoise + var_flat)
+
+    mosaic_node.var_poisson = var_poisson.copy().astype('f4')
+    mosaic_node.var_rnoise = var_rnoise.copy().astype('f4')
+    mosaic_node.var_flat = var_flat.copy().astype('f4')
+    mosaic_node.err = np.sqrt(
+        var_poisson + var_rnoise + var_flat).astype('f4')
     mosaic_node.context = context
-    
 
     # Weight
     # Use exptime weight
@@ -703,7 +715,7 @@ def add_more_metadata(metadata, efftimes, filter_name, wcs, shape, nexposures):
     """Fill in the L3 metadata for simulations.
 
     Updates the 'metadata' array in place.  Touches a number of fields in
-    metadata.basic, metadata.photometry, metadata.resample, metadata.wcsinfo
+    metadata.coadd_info, metadata.photometry, metadata.resample, metadata.wcsinfo
     and the metadata root.
 
     Parameters
@@ -722,56 +734,47 @@ def add_more_metadata(metadata, efftimes, filter_name, wcs, shape, nexposures):
         number of exposures contributing to mosaic
     """
     maxtime = np.max(efftimes)
-    meantime = metadata['basic']['time_mean_mjd']
+    meantime = metadata['coadd_info']['time_mean'].mjd
     meanexptime = (efftimes if np.isscalar(efftimes) else
                    np.mean(efftimes[efftimes > 0]))
     # guesses at the first and last times; do not really make sense
     # for this kind of simulation
-    metadata['basic']['time_first_mjd'] = meantime - maxtime / 24 / 60 / 60 / 2
-    metadata['basic']['time_last_mjd'] = meantime + maxtime / 24 / 60 / 60 / 2
-    metadata['basic']['max_exposure_time'] = maxtime
-    metadata['basic']['mean_exposure_time'] = meanexptime
+    from astropy.time import Time
+    metadata['coadd_info']['time_first'] = Time(
+        meantime - maxtime / 24 / 60 / 60 / 2, format='mjd')
+    metadata['coadd_info']['time_last'] = Time(
+        meantime + maxtime / 24 / 60 / 60 / 2, format='mjd')
+    for field_name in ['time_first', 'time_last']:
+        metadata['coadd_info'][field_name] = Time(
+            metadata['coadd_info'][field_name].isot)
+    metadata['coadd_info']['max_exposure_time'] = maxtime
+    metadata['coadd_info']['exposure_time'] = meanexptime
     for step in ['flux', 'outlier_detection', 'skymatch', 'resample']:
         metadata['cal_step'][step] = 'COMPLETE'
-    metadata['basic']['individual_image_meta'] = None
+    metadata['coadd_info']['individual_image_meta'] = None
     metadata['model_type'] = 'WfiMosaic'
-    metadata['photometry']['conversion_microjanskys'] = (
-        (1e12 * (u.rad / u.arcsec) ** 2).to(u.dimensionless_unscaled))
-    metadata['photometry']['conversion_megajanskys'] = 1
 
     cenx, ceny = ((shape[1] - 1) / 2, (shape[0] - 1) / 2)
     c1 = wcs.pixel_to_world(cenx, ceny)
     c2 = wcs.pixel_to_world(cenx + 1, ceny)
     pscale = c1.separation(c2)
 
-    metadata['photometry']['pixelarea_steradians'] = (pscale ** 2).to(u.sr)
-    metadata['photometry']['pixelarea_arcsecsq'] = (
-        pscale.to(u.arcsec) ** 2)
-    metadata['photometry']['conversion_microjanskys_uncertainty'] = 0
-    metadata['photometry']['conversion_megajanskys_uncertainty'] = 0
     metadata['resample']['pixel_scale_ratio'] = (
-        pscale.to(u.arcsec).value / romanisim.parameters.pixel_scale)
+        pscale.to(u.arcsec).value / romanisim.models.parameters.pixel_scale)
     metadata['resample']['pixfrac'] = 0
     # our simulations sort of imply idealized 0 droplet size
     metadata['resample']['pointings'] = nexposures
-    metadata['resample']['product_exposure_time'] = (
-        metadata['basic']['max_exposure_time'])
     xref, yref = wcs.world_to_pixel_values(
         metadata['wcsinfo']['ra_ref'], metadata['wcsinfo']['dec_ref'])
     metadata['wcsinfo']['x_ref'] = xref
     metadata['wcsinfo']['y_ref'] = yref
     metadata['wcsinfo']['rotation_matrix'] = [[1, 0], [0, 1]]
     metadata['wcsinfo']['pixel_scale'] = pscale.to(u.arcsec).value
-    metadata['wcsinfo']['pixel_scale_local'] = metadata['wcsinfo']['pixel_scale']
-    metadata['wcsinfo']['s_region'] = romanisim.wcs.create_s_region(wcs, shape)
-    metadata['wcsinfo']['pixel_shape'] = shape
-    metadata['wcsinfo']['ra_center'] = c1.ra.to(u.degree).value
-    metadata['wcsinfo']['dec_center'] = c1.dec.to(u.degree).value
-    xcorn, ycorn = [[0, shape[1] - 1, shape[1] - 1, 0],
-                    [0, 0, shape[0] - 1, shape[0] - 1]]
-    ccorn = wcs.pixel_to_world(xcorn, ycorn)
-    for i, corn in enumerate(ccorn):
-        metadata['wcsinfo']['ra_corn{i+1}'] = corn.ra.to(u.degree).value
-        metadata['wcsinfo']['dec_corn{i+1}'] = corn.dec.to(u.degree).value
-    metadata['wcsinfo']['orientat_local'] = 0
-    metadata['wcsinfo']['orientat'] = 0
+    metadata['wcsinfo']['pixel_scale_ref'] = metadata['wcsinfo']['pixel_scale']
+    metadata['wcsinfo']['s_region'] = romanisim.models.wcs.create_s_region(wcs, shape)
+    metadata['wcsinfo']['image_shape'] = shape
+    metadata['wcsinfo']['ra'] = c1.ra.to(u.degree).value
+    metadata['wcsinfo']['dec'] = c1.dec.to(u.degree).value
+    metadata['wcsinfo']['orientation_ref'] = 0
+    metadata['wcsinfo']['orientation'] = 0
+    metadata['wcsinfo']['projection'] = 'TAN'

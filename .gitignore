@@ -149,3 +149,7 @@ docs/source/api
 
 # ASDF save files
 **/*.asdf
+
+# misc
+uv.lock
+romanisim/models/example_APIs.ipynb
