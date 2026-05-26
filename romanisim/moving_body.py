@@ -1,5 +1,9 @@
 """This module contains routines to add moving object to simulated data products.
 """
+from os import times
+from time import perf_counter
+import copy
+
 import numpy as np
 import galsim
 from romanisim import psf
@@ -51,7 +55,6 @@ class MovingBody():
         profile = galsim.Box(width, self.height).withFlux(self.photon_flux).rotate(galsim.Angle(self.direction, unit=galsim.degrees))
         return profile * self.extra_flux_factor * parameters.read_time
 
-
 def simulate_body(
     resultants,
     times,
@@ -62,7 +65,8 @@ def simulate_body(
     oversample=4,
     inv_linearity=None,
     filter_name=None,
-    detector_number=None
+    detector_number=None,
+    enable_timing=True,
 ):
     """Adds a moving body to an existing image.
 
@@ -92,6 +96,8 @@ def simulate_body(
         seed to use for random number generator
     oversample : int
         oversampling with which to sample WebbPSF PSF
+    enable_timing : bool
+        if True, logs component timings and identifies the slowest section
 
     Returns
     -------
@@ -100,6 +106,22 @@ def simulate_body(
     """
 
     ## TODO: Implement persistence
+
+    timing = {
+        'setup': 0.0,
+        'position_update': 0.0,
+        'profile_gen': 0.0,
+        'psf_select': 0.0,
+        'convolve': 0.0,
+        'wcs': 0.0,
+        'draw_stamp': 0.0,
+        'poisson_noise': 0.0,
+        'accumulate': 0.0,
+        'linearity': 0.0,
+        'resultant_finalize': 0.0,
+    }
+    overall_start = perf_counter()
+    setup_start = perf_counter()
 
     pixel_scale = parameters.pixel_scale
     if wcs is None:
@@ -116,14 +138,16 @@ def simulate_body(
     else:
         moving_psf = psf.saved_psf
 
+    timing['setup'] += perf_counter() - setup_start
+
     body_accum_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
     body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
     
-    num_reads = times[-1][-1] / parameters.read_time
-    if num_reads % 1 > 0:
+    expected_num_reads = times[-1][-1] / parameters.read_time
+    if expected_num_reads % 1 > 0:
         log.error('times not divisible by read time!!!!')
-        raise ValueError('Last time in t_ij is not')
-    num_reads = round(num_reads)
+        raise ValueError('Last time in t_ij is not divisible by read time')
+    num_reads = round(expected_num_reads)
     saved_reads = []
     for ts in times:
         saved_reads += [round(t / parameters.read_time) for t in ts]
@@ -135,9 +159,11 @@ def simulate_body(
     for read_i in range(num_reads):
         read_num = read_i + 1
         # loop over the moving bodies and add their points to the accumulated image
-        for i,mb in enumerate(moving_body_list):
+        for j,mb in enumerate(moving_body_list):
+            t0 = perf_counter()
             mb.calculate_read_end_position(parameters.read_time)
             psf_position = (mb.read_start_position + mb.read_end_position) / 2. #adjust to make the boxes not overlap
+            timing['position_update'] += perf_counter() - t0
 
             # add new psf at the read position
             if hasattr(moving_psf, 'at_position'):
@@ -145,29 +171,43 @@ def simulate_body(
             else:
                 psf0 = moving_psf
 
+            t0 = perf_counter() 
             body_conv = galsim.Convolve(mb.galsim_profile, psf0)
+            timing['convolve'] += perf_counter() - t0
+            t0 = perf_counter()
             image_pos = galsim.PositionD(psf_position[0], psf_position[1])
             pwcs = wcs.local(image_pos)
+            timing['wcs'] += perf_counter() - t0
+            t0 = perf_counter()
             stamp = body_conv.drawImage(center=image_pos, wcs=pwcs)
-            stamp.addNoise(galsim.PoissonNoise(rng))
+            timing['draw_stamp'] += perf_counter() - t0
 
+            t0 = perf_counter()
+            stamp.addNoise(galsim.PoissonNoise(rng))
+            timing['poisson_noise'] += perf_counter() - t0
+
+            t0 = perf_counter()
             overlapping_bounds = stamp.bounds & body_resultant_image.bounds
             if overlapping_bounds.area() > 0:
                 body_accum_image[overlapping_bounds] += stamp[overlapping_bounds]
+            timing['accumulate'] += perf_counter() - t0
 
             # Update the position for the next step
-            moving_body_list[i].read_start_position = mb.read_end_position
+            moving_body_list[j].read_start_position = mb.read_end_position
 
         if read_num in saved_reads:
             if inv_linearity is not None:
                 # Apply inverse linearity
+                t0 = perf_counter()
                 body_resultant_image += inv_linearity.apply(
                         body_accum_image.array, electrons=True)
+                timing['linearity'] += perf_counter() - t0
             else:
                 body_resultant_image += body_accum_image.copy()
-
+            
             num_reads_in_resultant += 1
 
+        t0 = perf_counter()
         if read_num in last_read_number_per_resultant:
             # add the new PSF to the resultant
             resultants[resultant_i,:,:] += body_resultant_image.array / num_reads_in_resultant
@@ -175,7 +215,19 @@ def simulate_body(
             resultant_i += 1
             # zero out the resultant array for the next resultant
             body_resultant_image = galsim.Image(resultants.shape[1], resultants.shape[2], init_value=0)
-            num_reads_in_resultant = 0
+            num_reads_in_resultant = 0    
 
+        timing['resultant_finalize'] += perf_counter() - t0
+
+    if enable_timing:
+        total_elapsed = perf_counter() - overall_start
+        slowest_component = max(timing, key=timing.get)
+        log.info('simulate_body timing summary (s): total=%.6f', total_elapsed)
+        for component, dt in sorted(timing.items(), key=lambda item: item[1], reverse=True):
+            frac = (dt / total_elapsed * 100.0) if total_elapsed > 0 else 0.0
+            log.info('  %s: %.6f (%.1f%%)', component, dt, frac)
+        log.info('simulate_body slowest component: %s (%.6f s)',
+                 slowest_component, timing[slowest_component])
+        stop
 
     return resultants
