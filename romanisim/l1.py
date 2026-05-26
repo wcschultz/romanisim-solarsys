@@ -106,7 +106,7 @@ import numpy as np
 import asdf
 import galsim
 from scipy import ndimage
-from . import log, cr
+from . import log, cr, moving_body
 
 from roman_datamodels.datamodels import ScienceRawModel
 
@@ -381,7 +381,10 @@ def apportion_counts_to_resultants(
 
     if persistence is not None:
         tstart = tstart.mjd
-
+        
+    if crparam is not None:
+        log.info('Including CRs')
+    
     # Loop over read probabilities
     for i, pi in enumerate(pij):
         # Reset resultant counts
@@ -583,7 +586,8 @@ def make_l1(counts, read_pattern,
             rng=None, seed=None,
             gain=None, inv_linearity=None, crparam=None,
             persistence=None, tstart=None, saturation=None,
-            darkdecaysignal=None, ipc_model=None):
+            darkdecaysignal=None, ipc_model=None, metadata=None,
+            moving_bodies_catalog=None):
     """Make an L1 image from a total electrons image.
 
     This apportions the total electrons among the different resultants and adds
@@ -623,6 +627,12 @@ def make_l1(counts, read_pattern,
         Dictionary with keys 'amplitude', 'time_constant', and 'sca'
         describing the dark decay signal.  If None, no dark decay is
         added.
+    metadata : dict, optional
+        Metadata describing the current exposure. Required when adding
+        moving bodies so the detector and filter can be identified.
+    moving_bodies_catalog : astropy.table.Table, optional
+        Catalog of moving bodies to render into the resultants. If None,
+        no moving bodies are added.
 
     Returns
     -------
@@ -648,7 +658,11 @@ def make_l1(counts, read_pattern,
         persistence=persistence, tstart=tstart,
         rng=rng, seed=seed)
 
-    # roman.addReciprocityFailure(resultants_object)
+    if moving_bodies_catalog is not None and len(moving_bodies_catalog) > 0:
+        if metadata is None:
+            raise ValueError('metadata is required when adding moving bodies')
+        log.info('Adding moving bodies...')
+        resultants = moving_body.simulate_body(resultants, tij, moving_bodies_catalog, wcs=counts.wcs, rng=rng, seed=seed, inv_linearity=inv_linearity, filter_name=metadata['instrument']['optical_element'], detector_number=int(metadata['instrument']['detector'][3:]))
 
     if ipc_model is not None:
         ipc_model.apply(resultants)

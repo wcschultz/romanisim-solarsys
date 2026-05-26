@@ -561,6 +561,7 @@ def simulate_counts_generic(image, exptime, objlist=None, psf=None,
     flux_to_counts_factor = exptime * maxqe
     if not chromatic:
         flux_to_counts_factor *= zpflux
+
     xposk = xpos[keep] if xpos is not None else None
     yposk = ypos[keep] if ypos is not None else None
     objinfokeep = add_objects_to_image(
@@ -696,6 +697,8 @@ def simulate_counts(metadata, objlist,
     psf = romanisim.psf.make_psf(sca, filter_name, wcs=imwcs,
                                  chromatic=chromatic, psftype=psftype,
                                  variable=True, date=date, **psf_keywords)
+    romanisim.psf.saved_psf = psf
+
     image = galsim.ImageF(parameters.n_pix, parameters.n_pix, wcs=imwcs, xmin=0, ymin=0)
     SCA_cent_pos = imwcs.toWorld(image.true_center)
     sky_level = models.backgrounds.getSkyLevel(bandpass, world_pos=SCA_cent_pos,
@@ -1024,6 +1027,7 @@ def simulate(metadata, objlist,
             tstart=image_mod.meta.exposure.start_time,
             persistence=persistence,
             saturation=saturation,
+            metadata=image_mod.meta,
             darkdecaysignal=darkdecaysignal,
             ipc_model=ipc_model,
             **kwargs)

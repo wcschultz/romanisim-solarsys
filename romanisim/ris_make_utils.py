@@ -346,7 +346,9 @@ def format_filename(filename, sca, bandpass=None, pretend_spectral=None):
     return pname.with_name(bname.format(*args, **kwargs))
 
 
-def simulate_image_file(args, metadata, cat, rng=None, persist=None, psf_keywords=dict(), **kwargs):
+def simulate_image_file(args, metadata, cat, rng=None, persist=None,
+                        moving_bodies_catalog=None, psf_keywords=dict(),
+                        **kwargs):
     """
     Simulate an image and write it to a file.
 
@@ -362,6 +364,8 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None, psf_keyword
         Uniform distribution based off of a random seed
     persist : romanisim.persistence.Persistence
         Persistence object
+    moving_bodies_catalog : astropy.table.Table, optional
+        Catalog of moving bodies to add to the simulated exposure.
     psf_keywords : dict
         Keywords passed to the PSF generation routine. 
         For STPSF, this dict can also include an "stpsf_options" dictionary to specify WFI object options (e.g. defocus, jitter).
@@ -376,11 +380,14 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None, psf_keyword
     filename = format_filename(args.filename, args.sca, bandpass=args.bandpass,
                                pretend_spectral=args.pretend_spectral)
 
+    crparam = getattr(args, 'crparam', dict())
+
     # Simulate image
     im, extras = image.simulate(
         metadata, cat, usecrds=args.usecrds,
         psftype=args.psftype, level=args.level, persistence=persist,
-        rng=rng, psf_keywords=psf_keywords, **kwargs)
+        rng=rng, moving_bodies_catalog=moving_bodies_catalog, crparam=crparam,
+        psf_keywords=psf_keywords, **kwargs)
 
     # Create metadata for simulation parameter
     romanisimdict = deepcopy(vars(args))
@@ -388,6 +395,9 @@ def simulate_image_file(args, metadata, cat, rng=None, persist=None, psf_keyword
         romanisimdict['filename'] = str(romanisimdict['filename'])
     romanisimdict.update(**extras)
     romanisimdict['version'] = romanisim.__version__
+    
+    if moving_bodies_catalog is not None:
+        romanisimdict['moving_bodies_catalog'] = moving_bodies_catalog
 
     basename = os.path.basename(filename)
     obsdata = parse_filename(basename)

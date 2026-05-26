@@ -19,6 +19,8 @@ from .models.parameters import (
 )
 from .models.psf_utils import getPSF
 
+saved_psf = None
+
 __all__ =  ['VariablePSF',
             'get_epsf_from_crds',
             'get_gridded_psf_model',

@@ -349,6 +349,14 @@ cr = {
     "pixel_depth": 5,
 }
 
+moving_body = {
+    "magnitude": 15,
+    "initial_position": (2048, 2048),
+    "angular_radius": -1,
+    "angular_speed": 5,
+    "direction": 0,
+}
+
 # Default metadata for level 3 mosaics
 default_mosaic_parameters_dictionary = {
     'coadd_info': {'time_mean': default_date,
